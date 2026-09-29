@@ -23,7 +23,10 @@ Kaotsuki は、VRChat の外からアバターの表情（ブレンドシェイ�
 ## インストール
 
 VPM に対応した VCC または ALCOM のプロジェクトへ、このパッケージを追加してください。
-VRChat SDK、Modular Avatar、NDMF は依存パッケージとして自動で追加されます。
+VRChat SDK、Modular Avatar、NDMF は依存パッケージとして自動で追加され、送り手アプリもパッケージに同梱されます。
+
+VCC を使わない場合は、Release の `.unitypackage` を導入し、依存パッケージを別途追加してください。
+`.unitypackage` には送り手アプリが含まれないため、Release に添付した `KaotsukiSender.exe` を使ってください。
 
 ## 使い方
 

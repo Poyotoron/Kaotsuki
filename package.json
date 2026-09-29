@@ -1,0 +1,19 @@
+{
+  "name": "net.maaaaa.kaotsuki",
+  "displayName": "Kaotsuki",
+  "version": "0.1.0",
+  "description": "OSC からアバターの表情（ブレンドシェイプ）を操作するためのツールです。",
+  "unity": "2022.3",
+  "license": "MIT",
+  "author": {
+    "name": "Poyotoron",
+    "url": "https://github.com/Poyotoron"
+  },
+  "url": "https://github.com/Poyotoron/Kaotsuki/releases/download/0.1.0/net.maaaaa.kaotsuki-0.1.0.zip",
+  "changelogUrl": "https://github.com/Poyotoron/Kaotsuki/blob/main/CHANGELOG.md",
+  "vpmDependencies": {
+    "com.vrchat.avatars": ">=3.7.0",
+    "nadena.dev.modular-avatar": ">=1.17.0 <2.0.0",
+    "nadena.dev.ndmf": ">=1.14.0 <2.0.0"
+  }
+}

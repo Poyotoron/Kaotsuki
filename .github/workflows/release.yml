@@ -1,0 +1,132 @@
+name: Build Release
+
+# 手動実行のみ。既定ブランチ(main)を選んで実行すること。
+# package.json の version を読み、その値でタグ・Release を作成し、
+# zip / unitypackage / package.json / 送り手の exe を Release に添付する。
+# VPM リスティングは Release に添付された package.json の url を辿る。
+# ※ リリース前に package.json の version と url が一致していること（url は
+#   releases/download/<version>/<name>-<version>.zip を指す）。
+# ※ Release の説明欄は .github/release-notes/<version>.md を使う。
+#   ファイルが無い場合はビルドを失敗させ、説明の無い Release を作らせない。
+# ※ 送り手（Sender~/）は Windows でビルドし、zip の Bin~/ に同梱する。
+#   ソース（Sender~/）は zip に含めない。
+on:
+  workflow_dispatch:
+
+jobs:
+  sender:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # ~/.cargo/bin も保存されるので、2 回目以降は Tauri CLI の導入が省ける
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "Sender~/src-tauri -> target"
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      # インストーラーは作らず、単体で動く exe だけを出力する
+      - name: Build Sender
+        working-directory: Sender~/src-tauri
+        run: cargo tauri build --no-bundle
+
+      - name: Upload Sender
+        uses: actions/upload-artifact@v4
+        with:
+          name: sender
+          path: Sender~/src-tauri/target/release/kaotsuki-sender.exe
+          if-no-files-found: error
+
+  build:
+    needs: sender
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # package.json から name / version を取得（このリポジトリのルートがパッケージ本体）
+      - name: Get Package Name
+        id: pkgName
+        uses: zoexx/github-action-json-file-properties@b9f36ce6ee6fe2680cd3c32b2c62e22eade7e590
+        with:
+          file_path: "package.json"
+          prop_path: "name"
+
+      - name: Get Version
+        id: version
+        uses: zoexx/github-action-json-file-properties@b9f36ce6ee6fe2680cd3c32b2c62e22eade7e590
+        with:
+          file_path: "package.json"
+          prop_path: "version"
+
+      - name: Set Environment Variables
+        run: |
+          echo "zipFile=${{ runner.temp }}/${{ steps.pkgName.outputs.value }}-${{ steps.version.outputs.value }}.zip" >> $GITHUB_ENV
+          echo "unityPackage=${{ runner.temp }}/${{ steps.pkgName.outputs.value }}-${{ steps.version.outputs.value }}.unitypackage" >> $GITHUB_ENV
+          echo "metaList=${{ runner.temp }}/metaList" >> $GITHUB_ENV
+          echo "version=${{ steps.version.outputs.value }}" >> $GITHUB_ENV
+          echo "releaseNotes=.github/release-notes/${{ steps.version.outputs.value }}.md" >> $GITHUB_ENV
+
+      # 説明欄の無い Release を作らないよう、ノートの有無を先に確かめる
+      - name: Check Release Notes
+        run: |
+          if [ ! -s "${{ env.releaseNotes }}" ]; then
+            echo "Release notes not found: ${{ env.releaseNotes }}" >&2
+            exit 1
+          fi
+
+      # 送り手の exe をパッケージ内の Bin~/ に置く（Unity は末尾が ~ のフォルダを import しない）
+      - name: Download Sender
+        uses: actions/download-artifact@v4
+        with:
+          name: sender
+          path: ${{ runner.temp }}/sender
+
+      - name: Place Sender
+        run: |
+          mkdir -p 'Bin~'
+          cp "${{ runner.temp }}/sender/kaotsuki-sender.exe" 'Bin~/KaotsukiSender.exe'
+
+      # パッケージ本体を zip 化する。ドットで始まるフォルダは開発用なので配布物に含めない。
+      # 送り手はビルド済みの exe（Bin~/）だけを含め、ソース（Sender~/）は含めない。
+      - name: Create Package Zip
+        run: |
+          zip -r "${{ env.zipFile }}" . \
+            -x '.git/*' '.github/*' '.gitignore' '.*/*' 'docs~/*' 'Sender~/*'
+
+      # .meta 一覧を作り、.unitypackage を生成する（VCC 非利用者向け）
+      - name: Track Package Meta Files
+        run: find . -name '*.meta' ! -path './.*/*' > "${{ env.metaList }}"
+
+      - name: Create UnityPackage
+        uses: pCYSl5EDgo/create-unitypackage@v1.2.3
+        with:
+          package-path: ${{ env.unityPackage }}
+          include-files: ${{ env.metaList }}
+
+      # package.json の version をタグにする
+      - name: Create Tag
+        uses: rickstaa/action-create-tag@v1
+        with:
+          tag: "${{ env.version }}"
+
+      # .unitypackage には Bin~/ が入らないため、exe も単独で添付する
+      - name: Make Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.zipFile }}
+            ${{ env.unityPackage }}
+            package.json
+            Bin~/KaotsukiSender.exe
+          tag_name: ${{ env.version }}
+          body_path: ${{ env.releaseNotes }}

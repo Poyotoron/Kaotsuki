@@ -104,3 +104,17 @@ InitTestScene*.unity*
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+## AI Agent
+.claude
+.claude/
+.codex
+.codex/
+
+.agents/
+.agents
+
+# 送り手のビルド成果物
+Bin~/
+Sender~/src-tauri/target/
+Sender~/src-tauri/gen/

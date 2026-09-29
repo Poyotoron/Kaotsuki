@@ -1,0 +1,14 @@
+{
+    "name": "net.maaaaa.kaotsuki.Runtime",
+    "rootNamespace": "Poyo.Kaotsuki",
+    "references": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -1,0 +1,21 @@
+{
+    "name": "net.maaaaa.kaotsuki.Editor",
+    "rootNamespace": "Poyo.Kaotsuki.Editor",
+    "references": [
+        "net.maaaaa.kaotsuki.Runtime",
+        "nadena.dev.ndmf",
+        "nadena.dev.ndmf.runtime",
+        "nadena.dev.modular-avatar.core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

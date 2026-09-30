@@ -1,8 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod expression;
 mod map;
 mod osc;
+mod receiver;
 mod scheduler;
 mod settings;
 
@@ -34,8 +36,15 @@ fn main() {
             )));
             app.manage(AppState {
                 scheduler: Arc::clone(&scheduler),
-                settings: Mutex::new(settings),
+                settings: Mutex::new(settings.clone()),
+                receiver: Mutex::new(None),
+                current_map: Mutex::new(None),
+                receive_status: Mutex::new(receiver::ReceiveStatus {
+                    state: "disabled",
+                    port: settings.receive_port,
+                }),
             });
+            commands::restart_receiver(&handle, &app.state::<AppState>(), &settings);
             scheduler::start(handle, scheduler);
             Ok(())
         })
@@ -46,7 +55,14 @@ fn main() {
             commands::get_settings,
             commands::save_settings,
             commands::set_slot,
-            commands::send_enabled,
+            commands::set_enabled,
+            commands::get_enabled,
+            commands::set_lip_sync,
+            commands::get_lip_sync,
+            commands::get_receive_status,
+            commands::expression_folder,
+            commands::save_expression,
+            commands::apply_expression,
             commands::reset,
         ])
         .run(tauri::generate_context!())

@@ -16,12 +16,20 @@
         <button id="map-open" type="button">ファイルを開く…</button>
       </div>
       <p id="map-info">マップを選んでください</p>
+      <p id="receive-info"></p>
     </header>
 
     <section class="controls">
       <div class="action-buttons">
-        <button id="btn-on" class="primary" type="button" disabled>ON</button>
-        <button id="btn-off" type="button" disabled>OFF</button>
+        <span class="switch-label" id="enabled-label">Kaotsuki</span>
+        <button id="toggle-enabled" class="switch" type="button" role="switch" aria-checked="true" aria-labelledby="enabled-label">
+          <span class="switch-text">ON</span>
+        </button>
+        <span class="switch-label" id="lipsync-label">口パク</span>
+        <button id="toggle-lipsync" class="switch" type="button" role="switch" aria-checked="false"
+                aria-labelledby="lipsync-label" title="Kaotsuki が ON の間も口パクを動かします" disabled>
+          <span class="switch-text">OFF</span>
+        </button>
         <button id="btn-reset" type="button" disabled>リセット</button>
       </div>
       <div class="target">
@@ -30,7 +38,12 @@
       </div>
     </section>
 
-    <div id="error" role="alert" hidden></div>
+    <section class="expression-controls">
+      <button id="btn-save-expression" type="button" disabled>表情を保存…</button>
+      <button id="btn-load-expression" type="button" disabled>表情を読み込む…</button>
+    </section>
+
+    <div id="message" role="alert" hidden></div>
     <input id="search" type="search" placeholder="ブレンドシェイプを検索" disabled>
   </div>
 
@@ -45,6 +58,9 @@
       <input id="set-port" type="number" min="1" max="65535" required>
       <label for="set-hold">保持時間（ミリ秒）</label>
       <input id="set-hold" type="number" min="100" max="1000" step="10" required>
+      <label class="check"><input id="set-receive" type="checkbox"> VRChat から受信する（アバターに合わせてマップを切り換える）</label>
+      <label for="set-receive-port">受信ポート</label>
+      <input id="set-receive-port" type="number" min="1" max="65535" required>
       <p id="settings-error" role="alert"></p>
       <div class="dialog-actions">
         <button id="settings-cancel" type="button">キャンセル</button>

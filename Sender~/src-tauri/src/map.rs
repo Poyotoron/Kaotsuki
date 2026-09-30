@@ -11,9 +11,13 @@ const OSC_PREFIX: &str = "/avatar/parameters/";
 struct RawMap {
     format: String,
     version: u32,
+    #[serde(default)]
+    map_name: String,
     avatar_name: String,
     #[serde(default)]
     blueprint_id: String,
+    #[serde(default)]
+    avatars: Option<Vec<RawAvatar>>,
     #[serde(default)]
     generated_at: String,
     parameters: RawParameters,
@@ -24,7 +28,18 @@ struct RawMap {
 #[derive(Deserialize)]
 struct RawParameters {
     enabled: String,
+    #[serde(rename = "lipSync", default)]
+    lip_sync: Option<String>,
     channels: Vec<RawChannel>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawAvatar {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    blueprint_id: String,
 }
 
 #[derive(Deserialize)]
@@ -41,6 +56,15 @@ struct RawSlot {
     mesh: String,
     blend_shape: String,
     default_weight: f32,
+    #[serde(default)]
+    group: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AvatarRef {
+    pub name: String,
+    pub blueprint_id: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -48,8 +72,11 @@ struct RawSlot {
 pub struct MapView {
     pub path: String,
     pub avatar_name: String,
+    pub map_name: String,
+    pub avatars: Vec<AvatarRef>,
     pub generated_at: String,
     pub channel_count: u8,
+    pub has_lip_sync: bool,
     pub slots: Vec<SlotView>,
 }
 
@@ -62,6 +89,7 @@ pub struct SlotView {
     pub blend_shape: String,
     pub default_weight: f32,
     pub default_value: u8,
+    pub group: String,
 }
 
 #[derive(Serialize)]
@@ -69,6 +97,9 @@ pub struct SlotView {
 pub struct MapEntry {
     pub path: String,
     pub avatar_name: String,
+    pub map_name: String,
+    pub avatar_names: Vec<String>,
+    pub blueprint_ids: Vec<String>,
     pub modified: u64,
 }
 
@@ -81,6 +112,7 @@ pub struct ChannelAddresses {
 #[derive(Clone)]
 pub struct ParamNames {
     pub enabled: String,
+    pub lip_sync: Option<String>,
     pub channels: Vec<ChannelAddresses>,
 }
 
@@ -101,7 +133,25 @@ pub fn load(path: &Path) -> Result<(MapView, ParamNames), String> {
         return Err("対応していないファイルです".to_string());
     }
 
-    let _ = raw.blueprint_id;
+    let map_name = if raw.map_name.trim().is_empty() {
+        raw.avatar_name.clone()
+    } else {
+        raw.map_name.trim().to_string()
+    };
+    let avatars = match raw.avatars {
+        Some(list) => list
+            .into_iter()
+            .map(|avatar| AvatarRef {
+                name: avatar.name,
+                blueprint_id: avatar.blueprint_id,
+            })
+            .collect(),
+        None if !raw.blueprint_id.is_empty() => vec![AvatarRef {
+            name: raw.avatar_name.clone(),
+            blueprint_id: raw.blueprint_id,
+        }],
+        None => Vec::new(),
+    };
     let channel_count = raw.parameters.channels.len();
     let mut seen = HashSet::new();
     let slots = raw
@@ -122,12 +172,17 @@ pub fn load(path: &Path) -> Result<(MapView, ParamNames), String> {
                 blend_shape: slot.blend_shape,
                 default_weight: slot.default_weight,
                 default_value: weight_to_value(slot.default_weight),
+                group: slot.group,
             })
         })
         .collect();
 
     let params = ParamNames {
         enabled: format!("{OSC_PREFIX}{}", raw.parameters.enabled),
+        lip_sync: raw
+            .parameters
+            .lip_sync
+            .map(|name| format!("{OSC_PREFIX}{name}")),
         channels: raw
             .parameters
             .channels
@@ -141,8 +196,11 @@ pub fn load(path: &Path) -> Result<(MapView, ParamNames), String> {
     let view = MapView {
         path: path.to_string_lossy().into_owned(),
         avatar_name: raw.avatar_name,
+        map_name,
+        avatars,
         generated_at: raw.generated_at,
         channel_count: channel_count as u8,
+        has_lip_sync: params.lip_sync.is_some(),
         slots,
     };
     Ok((view, params))
@@ -173,6 +231,18 @@ pub fn list(folder: &Path) -> Vec<MapEntry> {
         maps.push(MapEntry {
             path: map.path,
             avatar_name: map.avatar_name,
+            map_name: map.map_name,
+            avatar_names: map
+                .avatars
+                .iter()
+                .map(|avatar| avatar.name.clone())
+                .collect(),
+            blueprint_ids: map
+                .avatars
+                .iter()
+                .filter(|avatar| !avatar.blueprint_id.is_empty())
+                .map(|avatar| avatar.blueprint_id.clone())
+                .collect(),
             modified,
         });
     }
@@ -183,6 +253,14 @@ pub fn list(folder: &Path) -> Vec<MapEntry> {
 
 pub fn weight_to_value(weight: f32) -> u8 {
     (weight.clamp(0.0, 100.0) * 255.0 / 100.0).round() as u8
+}
+
+/// アバター ID が avatars に含まれるマップのパス。複数あれば更新日時が新しいもの。
+pub fn find_by_avatar(folder: &Path, avatar_id: &str) -> Option<String> {
+    list(folder)
+        .into_iter()
+        .find(|entry| entry.blueprint_ids.iter().any(|id| id == avatar_id))
+        .map(|entry| entry.path)
 }
 
 #[cfg(test)]
@@ -289,5 +367,107 @@ mod tests {
                 assert_eq!(params.channels[1].index, "/avatar/parameters/Index2");
             },
         );
+    }
+
+    fn map_json(fields: serde_json::Value) -> String {
+        let mut value = serde_json::json!({
+            "format": "kaotsuki-map", "version": 1, "avatarName": "Foo_Casual",
+            "blueprintId": "avtr_a", "valueMax": 255,
+            "parameters": {"enabled": "Kaotsuki/Enabled", "channels": [{"index": "Kaotsuki/Index", "value": "Kaotsuki/Value"}]},
+            "slots": [{"channel": 1, "index": 1, "mesh": "Body", "blendShape": "a", "defaultWeight": 0}]
+        });
+        for (key, entry) in fields.as_object().expect("fields object") {
+            value[key] = entry.clone();
+        }
+        value.to_string()
+    }
+
+    #[test]
+    fn legacy_map_gets_defaults() {
+        with_map_file(&map_json(serde_json::json!({})), |path| {
+            let (map, _) = load(path).expect("legacy map");
+            assert_eq!(map.map_name, map.avatar_name);
+            assert_eq!(map.avatars.len(), 1);
+            assert_eq!(map.avatars[0].blueprint_id, "avtr_a");
+            assert!(map.slots.iter().all(|slot| slot.group.is_empty()));
+        });
+    }
+
+    #[test]
+    fn legacy_map_without_blueprint_has_no_avatars() {
+        with_map_file(&map_json(serde_json::json!({"blueprintId": ""})), |path| {
+            let (map, _) = load(path).expect("legacy map");
+            assert!(map.avatars.is_empty());
+        });
+    }
+
+    #[test]
+    fn new_fields_are_read() {
+        let json = map_json(serde_json::json!({
+            "mapName": " Foo ",
+            "avatars": [{"name": "Foo_Casual", "blueprintId": "avtr_a"}, {"name": "Foo_Swimsuit", "blueprintId": "avtr_b"}],
+            "slots": [
+                {"channel": 1, "index": 1, "mesh": "Body", "blendShape": "a", "defaultWeight": 0, "group": ""},
+                {"channel": 1, "index": 2, "mesh": "Body", "blendShape": "b", "defaultWeight": 0, "group": "目"}
+            ]
+        }));
+        with_map_file(&json, |path| {
+            let (map, _) = load(path).expect("map");
+            assert_eq!(map.map_name, "Foo");
+            assert_eq!(map.avatars.len(), 2);
+            assert_eq!(map.slots[1].group, "目");
+        });
+    }
+
+    #[test]
+    fn explicit_empty_avatars_does_not_use_legacy_id() {
+        with_map_file(&map_json(serde_json::json!({"avatars": []})), |path| {
+            assert!(load(path).expect("map").0.avatars.is_empty());
+        });
+    }
+
+    #[test]
+    fn find_by_avatar_uses_avatars() {
+        let folder = std::env::temp_dir().join(format!(
+            "kaotsuki-map-folder-{}-{}",
+            std::process::id(),
+            NEXT_FILE_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&folder).expect("create folder");
+        let path = folder.join("shared.json");
+        fs::write(&path, map_json(serde_json::json!({"blueprintId": "avtr_last", "avatars": [{"name": "Foo", "blueprintId": "avtr_a"}]}))).expect("write map");
+        assert_eq!(
+            super::find_by_avatar(&folder, "avtr_a"),
+            Some(path.to_string_lossy().into_owned())
+        );
+        assert_eq!(super::find_by_avatar(&folder, "avtr_b"), None);
+        assert_eq!(super::find_by_avatar(&folder, "avtr_last"), None);
+        fs::remove_file(path).expect("remove map");
+        fs::remove_dir(folder).expect("remove folder");
+    }
+
+    #[test]
+    fn lip_sync_is_read() {
+        let json = map_json(serde_json::json!({"parameters": {
+            "enabled": "Kaotsuki/Enabled", "lipSync": "Kaotsuki/LipSync",
+            "channels": [{"index": "Kaotsuki/Index", "value": "Kaotsuki/Value"}]
+        }}));
+        with_map_file(&json, |path| {
+            let (map, params) = load(path).expect("map");
+            assert!(map.has_lip_sync);
+            assert_eq!(
+                params.lip_sync.as_deref(),
+                Some("/avatar/parameters/Kaotsuki/LipSync")
+            );
+        });
+    }
+
+    #[test]
+    fn legacy_map_has_no_lip_sync() {
+        with_map_file(&map_json(serde_json::json!({})), |path| {
+            let (map, params) = load(path).expect("legacy map");
+            assert!(!map.has_lip_sync);
+            assert!(params.lip_sync.is_none());
+        });
     }
 }

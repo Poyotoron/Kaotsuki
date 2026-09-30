@@ -57,7 +57,8 @@ namespace Poyo.Kaotsuki.Editor
                 return;
             }
 
-            var controller = KaotsukiAnimatorBuilder.Build(table, receiver.overrideEyes, receiver.overrideMouth);
+            KaotsukiTrackingShapes.CreateCopies(table);
+            var controller = KaotsukiAnimatorBuilder.Build(table, receiver.overrideEyes);
             var merge = receiver.gameObject.AddComponent<ModularAvatarMergeAnimator>();
             merge.animator = controller;
             merge.layerType = VRCAvatarDescriptor.AnimLayerType.FX;
@@ -70,6 +71,7 @@ namespace Poyo.Kaotsuki.Editor
 
             var parameters = receiver.gameObject.AddComponent<ModularAvatarParameters>();
             parameters.parameters.Add(CreateParameter(KaotsukiInfo.ParamEnabled, ParameterSyncType.Bool));
+            parameters.parameters.Add(CreateParameter(KaotsukiInfo.ParamLipSync, ParameterSyncType.Bool));
             for (var channel = 1; channel <= table.ChannelCount; channel++)
             {
                 parameters.parameters.Add(CreateParameter(KaotsukiInfo.IndexParam(channel), ParameterSyncType.Int));
@@ -78,8 +80,12 @@ namespace Poyo.Kaotsuki.Editor
 
             try
             {
-                var path = KaotsukiMapWriter.Write(table, ctx.AvatarRootObject);
-                Debug.Log("[Kaotsuki] マップを書き出しました: " + path);
+                var result = KaotsukiMapWriter.Write(table, receiver, ctx.AvatarRootObject);
+                Debug.Log("[Kaotsuki] マップを書き出しました: " + result.Path);
+                if (result.RemovedOtherAvatars)
+                {
+                    KaotsukiErrors.Report(ErrorSeverity.NonFatal, KaotsukiErrors.MapShared, result.MapName);
+                }
             }
             catch (IOException e)
             {

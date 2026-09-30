@@ -12,6 +12,10 @@ namespace Poyo.Kaotsuki.Editor
         internal const string Truncated = "kaotsuki.warn.truncated";
         internal const string Skipped = "kaotsuki.warn.skipped";
         internal const string MapWrite = "kaotsuki.warn.map_write";
+        internal const string MapShared = "kaotsuki.warn.map_shared";
+        internal const string MapSharedDetail =
+            "マップ「{0}」を使っていた他のアバターとブレンドシェイプの構成が違うため、他のアバターの登録を外しました。" +
+            "外れたアバターは、ビルドし直すまで送り手の自動切換えの対象になりません。";
 
         private static readonly Dictionary<string, string> Messages = new Dictionary<string, string>
         {
@@ -25,6 +29,8 @@ namespace Poyo.Kaotsuki.Editor
             { Skipped + ":description", "{0}" },
             { MapWrite, "マップを書き出せませんでした" },
             { MapWrite + ":description", "{0}" },
+            { MapShared, "共通マップの構成が変わりました" },
+            { MapShared + ":description", MapSharedDetail },
         };
 
         internal static readonly Localizer Localizer = new Localizer(

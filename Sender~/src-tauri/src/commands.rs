@@ -1,7 +1,9 @@
+use crate::expression::{self, ApplyResult};
 use crate::map::{self, MapEntry, MapView};
+use crate::receiver::{ReceiveStatus, Receiver};
 use crate::scheduler::Scheduler;
 use crate::settings::Settings;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -9,17 +11,73 @@ use tauri::{AppHandle, Emitter, Manager, State};
 pub struct AppState {
     pub scheduler: Arc<Mutex<Scheduler>>,
     pub settings: Mutex<Settings>,
+    pub receiver: Mutex<Option<Receiver>>,
+    pub receive_status: Mutex<ReceiveStatus>,
+    pub current_map: Mutex<Option<MapView>>,
 }
 
-#[tauri::command]
-pub fn list_maps(app: AppHandle) -> Result<Vec<MapEntry>, String> {
-    let folder = app
+pub fn map_folder(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
         .path()
         .local_data_dir()
         .map_err(|error| error.to_string())?
         .join("Kaotsuki")
-        .join("Maps");
-    Ok(map::list(&folder))
+        .join("Maps"))
+}
+
+#[tauri::command]
+pub fn list_maps(app: AppHandle) -> Result<Vec<MapEntry>, String> {
+    Ok(map::list(&map_folder(&app)?))
+}
+
+pub fn restart_receiver(app: &AppHandle, state: &AppState, settings: &Settings) {
+    let Ok(mut receiver) = state.receiver.lock() else {
+        return;
+    };
+    if let Some(previous) = receiver.take() {
+        previous.stop();
+    }
+    let status = if !settings.receive {
+        ReceiveStatus {
+            state: "disabled",
+            port: settings.receive_port,
+        }
+    } else {
+        match Receiver::start(
+            app.clone(),
+            Arc::clone(&state.scheduler),
+            settings.receive_port,
+        ) {
+            Ok(started) => {
+                *receiver = Some(started);
+                ReceiveStatus {
+                    state: "listening",
+                    port: settings.receive_port,
+                }
+            }
+            Err(_) => ReceiveStatus {
+                state: "failed",
+                port: settings.receive_port,
+            },
+        }
+    };
+    if let Ok(mut stored) = state.receive_status.lock() {
+        *stored = status.clone();
+    }
+    drop(receiver);
+    let _ = app.emit("receive-status", status);
+}
+
+#[tauri::command]
+pub fn get_receive_status(state: State<'_, AppState>) -> ReceiveStatus {
+    state
+        .receive_status
+        .lock()
+        .map(|status| status.clone())
+        .unwrap_or(ReceiveStatus {
+            state: "failed",
+            port: 9001,
+        })
 }
 
 #[tauri::command]
@@ -29,11 +87,20 @@ pub fn load_map(
     path: String,
 ) -> Result<MapView, String> {
     let (map, params) = map::load(Path::new(&path))?;
-    state
+    let mut current = state
+        .current_map
+        .lock()
+        .map_err(|_| "マップを更新できません".to_string())?;
+    let send_result = state
         .scheduler
         .lock()
         .map_err(|_| "送り手の状態を更新できません".to_string())?
         .apply_map(&map, params);
+    *current = Some(map.clone());
+    drop(current);
+    if let Err(message) = send_result {
+        let _ = app.emit("send-error", message);
+    }
 
     let save_error = match state.settings.lock() {
         Ok(mut settings) => {
@@ -86,10 +153,27 @@ pub fn save_settings(
         .lock()
         .map_err(|_| "送り手の状態を更新できません".to_string())?
         .set_target(target, Duration::from_millis(settings.hold_ms));
-    *state
-        .settings
-        .lock()
-        .map_err(|_| "設定を更新できません".to_string())? = settings;
+    // NOTE: ポートを使っていたアプリを閉じた後、設定を保存し直すだけで受信を再開できるようにする。
+    let retry = settings.receive
+        && state
+            .receive_status
+            .lock()
+            .map(|status| status.state == "failed")
+            .unwrap_or(false);
+    let changed = {
+        let mut previous = state
+            .settings
+            .lock()
+            .map_err(|_| "設定を更新できません".to_string())?;
+        let changed = previous.receive != settings.receive
+            || previous.receive_port != settings.receive_port
+            || retry;
+        *previous = settings.clone();
+        changed
+    };
+    if changed {
+        restart_receiver(&app, &state, &settings);
+    }
     Ok(())
 }
 
@@ -101,12 +185,39 @@ pub fn set_slot(state: State<'_, AppState>, channel: u8, index: u8, value: u8) {
 }
 
 #[tauri::command]
-pub fn send_enabled(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+pub fn set_enabled(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
     state
         .scheduler
         .lock()
         .map_err(|_| "送り手の状態を更新できません".to_string())?
-        .send_enabled(enabled)
+        .set_enabled(enabled)
+}
+
+#[tauri::command]
+pub fn get_enabled(state: State<'_, AppState>) -> bool {
+    state
+        .scheduler
+        .lock()
+        .map(|scheduler| scheduler.enabled())
+        .unwrap_or(true)
+}
+
+#[tauri::command]
+pub fn set_lip_sync(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    state
+        .scheduler
+        .lock()
+        .map_err(|_| "送り手の状態を更新できません".to_string())?
+        .set_lip_sync(enabled)
+}
+
+#[tauri::command]
+pub fn get_lip_sync(state: State<'_, AppState>) -> bool {
+    state
+        .scheduler
+        .lock()
+        .map(|scheduler| scheduler.lip_sync())
+        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -116,4 +227,72 @@ pub fn reset(state: State<'_, AppState>) -> Result<(), String> {
         .lock()
         .map_err(|_| "送り手の状態を更新できません".to_string())?
         .reset()
+}
+
+#[tauri::command]
+pub fn expression_folder(app: AppHandle) -> Result<String, String> {
+    let folder = app
+        .path()
+        .local_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("Kaotsuki")
+        .join("Expressions");
+    std::fs::create_dir_all(&folder)
+        .map_err(|error| format!("表情のフォルダを作れませんでした: {error}"))?;
+    Ok(folder.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn save_expression(
+    state: State<'_, AppState>,
+    path: String,
+    saved_at: String,
+) -> Result<usize, String> {
+    let (map, values) = {
+        let current = state
+            .current_map
+            .lock()
+            .map_err(|_| "マップを取得できません".to_string())?;
+        let map = current
+            .as_ref()
+            .ok_or_else(|| "マップを開いてください".to_string())?;
+        let scheduler = state
+            .scheduler
+            .lock()
+            .map_err(|_| "送り手の状態を取得できません".to_string())?;
+        let values: std::collections::HashMap<(u8, u8), u8> = map
+            .slots
+            .iter()
+            .filter_map(|slot| {
+                scheduler
+                    .desired(slot.channel, slot.index)
+                    .map(|value| ((slot.channel, slot.index), value))
+            })
+            .collect();
+        (map.clone(), values)
+    };
+    expression::save(Path::new(&path), &map, &saved_at, |channel, index| {
+        values.get(&(channel, index)).copied()
+    })
+}
+
+#[tauri::command]
+pub fn apply_expression(state: State<'_, AppState>, path: String) -> Result<ApplyResult, String> {
+    let current = state
+        .current_map
+        .lock()
+        .map_err(|_| "マップを取得できません".to_string())?;
+    let map = current
+        .as_ref()
+        .ok_or_else(|| "マップを開いてください".to_string())?;
+    let entries = expression::load(Path::new(&path))?;
+    let result = expression::apply(&entries, &map.slots);
+    let mut scheduler = state
+        .scheduler
+        .lock()
+        .map_err(|_| "送り手の状態を更新できません".to_string())?;
+    for slot in &result.values {
+        scheduler.set_slot(slot.channel, slot.index, slot.value);
+    }
+    Ok(result)
 }

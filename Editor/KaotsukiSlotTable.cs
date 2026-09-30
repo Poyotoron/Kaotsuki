@@ -13,7 +13,10 @@ namespace Poyo.Kaotsuki.Editor
         internal SkinnedMeshRenderer Renderer;
         internal string Path;
         internal string BlendShape;
+        internal KaotsukiTrackingKind Tracking;
+        internal string AnimatedBlendShape;
         internal float DefaultWeight;
+        internal string Group;
     }
 
     internal sealed class KaotsukiSlotTable
@@ -42,6 +45,7 @@ namespace Poyo.Kaotsuki.Editor
                 return table;
             }
 
+            var tracking = KaotsukiTrackingShapes.Resolve(avatarRoot);
             var acceptedRenderers = new HashSet<SkinnedMeshRenderer>();
             for (var i = 0; i < receiver.meshes.Count; i++)
             {
@@ -76,10 +80,19 @@ namespace Poyo.Kaotsuki.Editor
                     ? new HashSet<string>()
                     : new HashSet<string>(entry.excludedBlendShapes);
                 var path = AnimationUtility.CalculateTransformPath(renderer.transform, avatarRoot);
+                var separators = KaotsukiSeparators.Resolve(mesh, entry);
+                var group = string.Empty;
 
                 for (var blendShapeIndex = 0; blendShapeIndex < mesh.blendShapeCount; blendShapeIndex++)
                 {
                     var blendShape = mesh.GetBlendShapeName(blendShapeIndex);
+                    // NOTE: 区切りは中身の無いダミーなので操作対象にしない。除外されていても、グループ分けには使う。
+                    if (separators[blendShapeIndex])
+                    {
+                        group = KaotsukiSeparators.GroupName(blendShape);
+                        continue;
+                    }
+
                     if (excluded.Contains(blendShape))
                     {
                         continue;
@@ -92,6 +105,7 @@ namespace Poyo.Kaotsuki.Editor
                         continue;
                     }
 
+                    var kind = tracking.KindOf(renderer, blendShape);
                     var number = table._slots.Count + 1;
                     table._slots.Add(new KaotsukiSlot
                     {
@@ -101,7 +115,13 @@ namespace Poyo.Kaotsuki.Editor
                         Renderer = renderer,
                         Path = path,
                         BlendShape = blendShape,
-                        DefaultWeight = Mathf.Clamp(renderer.GetBlendShapeWeight(blendShapeIndex), 0f, 100f),
+                        Tracking = kind,
+                        AnimatedBlendShape = blendShape,
+                        // NOTE: 口パク・まばたきは複製を動かすので、複製の既定値 0 を既定値にする。元の値はメッシュに残るので見た目は変わらない。
+                        DefaultWeight = kind != KaotsukiTrackingKind.None
+                            ? 0f
+                            : Mathf.Clamp(renderer.GetBlendShapeWeight(blendShapeIndex), 0f, 100f),
+                        Group = group,
                     });
                 }
             }

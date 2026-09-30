@@ -15,11 +15,11 @@ namespace Poyo.Kaotsuki.Editor
 
         private static int DriveLayerIndex(int channelCount) => 1 + channelCount;
 
-        internal static AnimatorController Build(KaotsukiSlotTable table, bool overrideEyes, bool overrideMouth)
+        internal static AnimatorController Build(KaotsukiSlotTable table, bool overrideEyes)
         {
             var controller = new AnimatorController { name = "Kaotsuki" };
             AddParameters(controller, table);
-            AddControlLayer(controller, table, overrideEyes, overrideMouth);
+            AddControlLayer(controller, table, overrideEyes);
             for (var channel = 1; channel <= table.ChannelCount; channel++)
             {
                 AddReceiveLayer(controller, table, channel);
@@ -34,6 +34,12 @@ namespace Poyo.Kaotsuki.Editor
             controller.AddParameter(new AnimatorControllerParameter
             {
                 name = KaotsukiInfo.ParamEnabled,
+                type = AnimatorControllerParameterType.Bool,
+                defaultBool = false,
+            });
+            controller.AddParameter(new AnimatorControllerParameter
+            {
+                name = KaotsukiInfo.ParamLipSync,
                 type = AnimatorControllerParameterType.Bool,
                 defaultBool = false,
             });
@@ -74,37 +80,49 @@ namespace Poyo.Kaotsuki.Editor
         private static void AddControlLayer(
             AnimatorController controller,
             KaotsukiSlotTable table,
-            bool overrideEyes,
-            bool overrideMouth)
+            bool overrideEyes)
         {
             var machine = new AnimatorStateMachine { name = LayerControl };
             // NOTE: 読み込み直後にトラッキングを Tracking へ戻すと他のギミックの設定を上書きするため、最初は何もしないステートから始める。
             var init = machine.AddState("Init", new Vector3(0, 0));
-            var on = machine.AddState("On", new Vector3(250, -50));
-            var off = machine.AddState("Off", new Vector3(250, 50));
+            var on = machine.AddState("On", new Vector3(250, -80));
+            // NOTE: ON の間も口パクを動かすかは LipSync で選ぶ。On と On LipSync の間を移っても Layer Control は同じ値を入れ直すだけ。
+            var onLipSync = machine.AddState("On LipSync", new Vector3(250, 0));
+            var off = machine.AddState("Off", new Vector3(250, 80));
             init.writeDefaultValues = true;
             on.writeDefaultValues = true;
+            onLipSync.writeDefaultValues = true;
             off.writeDefaultValues = true;
             machine.defaultState = init;
 
-            AddTransition(init, on, AnimatorConditionMode.If, 0f, KaotsukiInfo.ParamEnabled);
-            AddTransition(on, off, AnimatorConditionMode.IfNot, 0f, KaotsukiInfo.ParamEnabled);
-            AddTransition(off, on, AnimatorConditionMode.If, 0f, KaotsukiInfo.ParamEnabled);
+            AddTransition(init, on, (AnimatorConditionMode.If, KaotsukiInfo.ParamEnabled),
+                (AnimatorConditionMode.IfNot, KaotsukiInfo.ParamLipSync));
+            AddTransition(off, on, (AnimatorConditionMode.If, KaotsukiInfo.ParamEnabled),
+                (AnimatorConditionMode.IfNot, KaotsukiInfo.ParamLipSync));
+            AddTransition(init, onLipSync, (AnimatorConditionMode.If, KaotsukiInfo.ParamEnabled),
+                (AnimatorConditionMode.If, KaotsukiInfo.ParamLipSync));
+            AddTransition(off, onLipSync, (AnimatorConditionMode.If, KaotsukiInfo.ParamEnabled),
+                (AnimatorConditionMode.If, KaotsukiInfo.ParamLipSync));
+            AddTransition(on, onLipSync, (AnimatorConditionMode.If, KaotsukiInfo.ParamLipSync));
+            AddTransition(onLipSync, on, (AnimatorConditionMode.IfNot, KaotsukiInfo.ParamLipSync));
+            AddTransition(on, off, (AnimatorConditionMode.IfNot, KaotsukiInfo.ParamEnabled));
+            AddTransition(onLipSync, off, (AnimatorConditionMode.IfNot, KaotsukiInfo.ParamEnabled));
 
             var onBehaviours = new List<StateMachineBehaviour>
             {
                 CreateLayerControl(1f, table.ChannelCount),
+                CreateTrackingControl(overrideEyes, true, VRC_AnimatorTrackingControl.TrackingType.Animation),
+            };
+            onLipSync.behaviours = new StateMachineBehaviour[]
+            {
+                CreateLayerControl(1f, table.ChannelCount),
+                CreateTrackingControl(overrideEyes, true, VRC_AnimatorTrackingControl.TrackingType.Tracking),
             };
             var offBehaviours = new List<StateMachineBehaviour>
             {
                 CreateLayerControl(0f, table.ChannelCount),
+                CreateTrackingControl(overrideEyes, false, VRC_AnimatorTrackingControl.TrackingType.Tracking),
             };
-
-            if (overrideEyes || overrideMouth)
-            {
-                onBehaviours.Add(CreateTrackingControl(overrideEyes, overrideMouth, true));
-                offBehaviours.Add(CreateTrackingControl(overrideEyes, overrideMouth, false));
-            }
 
             // NOTE: Index / Value は同期パラメータなので自分だけで 0 に戻す。スロットの値は同期されないので、他のプレイヤーの画面でも既定値に戻す。
             var resetSynced = ScriptableObject.CreateInstance<VRCAvatarParameterDriver>();
@@ -265,7 +283,7 @@ namespace Poyo.Kaotsuki.Editor
             var binding = EditorCurveBinding.FloatCurve(
                 slot.Path,
                 typeof(SkinnedMeshRenderer),
-                "blendShape." + slot.BlendShape);
+                "blendShape." + slot.AnimatedBlendShape);
             AnimationUtility.SetEditorCurve(clip, binding, new AnimationCurve(new Keyframe(0f, weight)));
             return clip;
         }
@@ -282,8 +300,8 @@ namespace Poyo.Kaotsuki.Editor
 
         private static VRCAnimatorTrackingControl CreateTrackingControl(
             bool overrideEyes,
-            bool overrideMouth,
-            bool enabled)
+            bool eyesAnimation,
+            VRC_AnimatorTrackingControl.TrackingType mouth)
         {
             var noChange = VRC_AnimatorTrackingControl.TrackingType.NoChange;
             var control = ScriptableObject.CreateInstance<VRCAnimatorTrackingControl>();
@@ -296,31 +314,28 @@ namespace Poyo.Kaotsuki.Editor
             control.trackingLeftFingers = noChange;
             control.trackingRightFingers = noChange;
             control.trackingEyes = overrideEyes
-                ? enabled
+                ? eyesAnimation
                     ? VRC_AnimatorTrackingControl.TrackingType.Animation
                     : VRC_AnimatorTrackingControl.TrackingType.Tracking
                 : noChange;
-            control.trackingMouth = overrideMouth
-                ? enabled
-                    ? VRC_AnimatorTrackingControl.TrackingType.Animation
-                    : VRC_AnimatorTrackingControl.TrackingType.Tracking
-                : noChange;
+            control.trackingMouth = mouth;
             return control;
         }
 
         private static void AddTransition(
             AnimatorState source,
             AnimatorState destination,
-            AnimatorConditionMode mode,
-            float threshold,
-            string parameter)
+            params (AnimatorConditionMode mode, string parameter)[] conditions)
         {
             var transition = source.AddTransition(destination);
             transition.hasExitTime = false;
             transition.hasFixedDuration = true;
             transition.duration = 0f;
             transition.exitTime = 0f;
-            transition.AddCondition(mode, threshold, parameter);
+            foreach (var condition in conditions)
+            {
+                transition.AddCondition(condition.mode, 0f, condition.parameter);
+            }
         }
     }
 }

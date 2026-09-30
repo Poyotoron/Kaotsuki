@@ -78,8 +78,12 @@ namespace Poyo.Kaotsuki.Editor
 
             try
             {
-                var path = KaotsukiMapWriter.Write(table, ctx.AvatarRootObject);
-                Debug.Log("[Kaotsuki] マップを書き出しました: " + path);
+                var result = KaotsukiMapWriter.Write(table, receiver, ctx.AvatarRootObject);
+                Debug.Log("[Kaotsuki] マップを書き出しました: " + result.Path);
+                if (result.RemovedOtherAvatars)
+                {
+                    KaotsukiErrors.Report(ErrorSeverity.NonFatal, KaotsukiErrors.MapShared, result.MapName);
+                }
             }
             catch (IOException e)
             {

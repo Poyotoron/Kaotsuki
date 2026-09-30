@@ -8,12 +8,21 @@ namespace Poyo.Kaotsuki.Editor
     {
         public string format = "kaotsuki-map";
         public int version = 1;
+        public string mapName;
         public string avatarName;
         public string blueprintId;
+        public List<KaotsukiMapAvatar> avatars = new List<KaotsukiMapAvatar>();
         public string generatedAt;
         public KaotsukiMapParameters parameters = new KaotsukiMapParameters();
         public int valueMax = KaotsukiInfo.ValueMax;
         public List<KaotsukiMapSlot> slots = new List<KaotsukiMapSlot>();
+    }
+
+    [Serializable]
+    internal sealed class KaotsukiMapAvatar
+    {
+        public string name;
+        public string blueprintId;
     }
 
     [Serializable]
@@ -38,5 +47,6 @@ namespace Poyo.Kaotsuki.Editor
         public string mesh;
         public string blendShape;
         public float defaultWeight;
+        public string group;
     }
 }

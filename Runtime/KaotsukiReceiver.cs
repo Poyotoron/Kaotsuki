@@ -14,5 +14,8 @@ namespace Poyo.Kaotsuki
         public bool overrideEyes = true;
         // ON の間、リップシンクを止める。
         public bool overrideMouth = true;
+
+        // マップ名。空ならアバター名を使う。同じマップ名のアバターは、送り手で 1 つのマップを共有する。
+        public string mapName = string.Empty;
     }
 }

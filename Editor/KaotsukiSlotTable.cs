@@ -14,6 +14,7 @@ namespace Poyo.Kaotsuki.Editor
         internal string Path;
         internal string BlendShape;
         internal float DefaultWeight;
+        internal string Group;
     }
 
     internal sealed class KaotsukiSlotTable
@@ -76,10 +77,19 @@ namespace Poyo.Kaotsuki.Editor
                     ? new HashSet<string>()
                     : new HashSet<string>(entry.excludedBlendShapes);
                 var path = AnimationUtility.CalculateTransformPath(renderer.transform, avatarRoot);
+                var separators = KaotsukiSeparators.Resolve(mesh, entry);
+                var group = string.Empty;
 
                 for (var blendShapeIndex = 0; blendShapeIndex < mesh.blendShapeCount; blendShapeIndex++)
                 {
                     var blendShape = mesh.GetBlendShapeName(blendShapeIndex);
+                    // NOTE: 区切りは中身の無いダミーなので操作対象にしない。除外されていても、グループ分けには使う。
+                    if (separators[blendShapeIndex])
+                    {
+                        group = KaotsukiSeparators.GroupName(blendShape);
+                        continue;
+                    }
+
                     if (excluded.Contains(blendShape))
                     {
                         continue;
@@ -102,6 +112,7 @@ namespace Poyo.Kaotsuki.Editor
                         Path = path,
                         BlendShape = blendShape,
                         DefaultWeight = Mathf.Clamp(renderer.GetBlendShapeWeight(blendShapeIndex), 0f, 100f),
+                        Group = group,
                     });
                 }
             }

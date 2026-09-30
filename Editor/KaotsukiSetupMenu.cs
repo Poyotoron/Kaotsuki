@@ -45,6 +45,8 @@ namespace Poyo.Kaotsuki.Editor
                 var go = new GameObject("Kaotsuki");
                 go.transform.SetParent(root, false);
                 var receiver = go.AddComponent<KaotsukiReceiver>();
+                // NOTE: 素体の Prefab で Setup すると、その Variant（別衣装）にも同じマップ名が継承され、1 つのマップを共有できる。
+                receiver.mapName = KaotsukiMapWriter.SanitizeName(root.name);
                 // NOTE: 通常の Modular Avatar の手順で、利用者がメニューの置き場所を変えられるようにする。
                 go.AddComponent<ModularAvatarMenuInstaller>();
                 var item = go.AddComponent<ModularAvatarMenuItem>();

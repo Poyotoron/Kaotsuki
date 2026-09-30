@@ -11,12 +11,15 @@ namespace Poyo.Kaotsuki.Editor
         private enum ChangeKind
         {
             None,
+            MapName,
             OverrideEyes,
             OverrideMouth,
             Renderer,
             RemoveMesh,
             SetBlendShape,
             SetAll,
+            SetSeparator,
+            SetGroup,
             AddMesh,
         }
 
@@ -26,6 +29,7 @@ namespace Poyo.Kaotsuki.Editor
             Export,
             Launch,
             OpenFolder,
+            CreateClip,
         }
 
         // NOTE: GUIContent.none はエディタ全体で共有されるため、フィールドに保持して書き換えると他の画面の描画にまで文字が出る。
@@ -41,8 +45,29 @@ namespace Poyo.Kaotsuki.Editor
             internal string Search = string.Empty;
             internal bool[] Visible = Array.Empty<bool>();
             internal Vector2 Scroll;
+            internal bool[] Separator = Array.Empty<bool>();
+            internal GUIContent[] EditLabels = Array.Empty<GUIContent>();
+            internal int[] Ungrouped = Array.Empty<int>();
+            internal GroupView[] Groups = Array.Empty<GroupView>();
+            internal bool EditSeparators;
         }
 
+        private sealed class GroupView
+        {
+            internal GUIContent Label = Empty;
+            internal GUIContent Count = Empty;
+            internal int[] Members = Array.Empty<int>();
+            internal bool Expanded;
+        }
+
+        private static readonly GUIContent MapHeading = new GUIContent("マップ");
+        private static readonly GUIContent MapNameLabel = new GUIContent("マップ名");
+        private static readonly GUIContent MapNameHint = new GUIContent("同じマップ名のアバターは、送り手で 1 つのマップを共有します。空欄ならアバター名を使います。");
+        private static readonly GUIContent EditSeparatorsLabel = new GUIContent("区切りを編集");
+        private const string EditSeparatorsHelp = "チェックしたブレンドシェイプを区切りとして扱います。区切りは操作対象になりません。";
+        private static readonly GUIContent GroupOnLabel = new GUIContent("ON");
+        private static readonly GUIContent GroupOffLabel = new GUIContent("OFF");
+        private static readonly GUILayoutOption[] GroupButtonOptions = { GUILayout.Width(40f) };
         private static readonly GUIContent OptionsHeading = new GUIContent("オプション");
         private static readonly GUIContent MeshesHeading = new GUIContent("メッシュ");
         private static readonly GUIContent OverrideEyesLabel = new GUIContent("ON の間まばたき・視線を止める");
@@ -55,6 +80,7 @@ namespace Poyo.Kaotsuki.Editor
         private static readonly GUIContent ExportLabel = new GUIContent("マップを書き出す");
         private static readonly GUIContent LaunchLabel = new GUIContent("送り手を起動");
         private static readonly GUIContent OpenFolderLabel = new GUIContent("マップのフォルダを開く");
+        private static readonly GUIContent CreateClipLabel = new GUIContent("表情ファイルから AnimationClip を作る…");
         private static readonly GUILayoutOption[] RemoveOptions = { GUILayout.Width(22f) };
         private static readonly GUILayoutOption[] CountLabelOptions = { GUILayout.ExpandWidth(false) };
         private static readonly GUILayoutOption[] ScrollOptions = { GUILayout.MaxHeight(360f) };
@@ -120,18 +146,30 @@ namespace Poyo.Kaotsuki.Editor
                 EditorGUILayout.HelpBox(_skippedMessage, MessageType.Warning);
             }
 
-            EditorGUILayout.Space();
-            EditorGUILayout.LabelField(OptionsHeading, EditorStyles.boldLabel);
-
             var change = ChangeKind.None;
             var changeMeshIndex = -1;
             var changeBlendShape = -1;
+            var changeGroupIndex = -1;
+            var changeString = string.Empty;
             var changeBool = false;
             SkinnedMeshRenderer changeRenderer = null;
             var action = ActionKind.None;
 
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField(MapHeading, EditorStyles.boldLabel);
+            var mapName = EditorGUILayout.DelayedTextField(MapNameLabel, receiver.mapName ?? string.Empty);
+            if (!string.Equals(mapName, receiver.mapName ?? string.Empty, StringComparison.Ordinal))
+            {
+                change = ChangeKind.MapName;
+                changeString = mapName;
+            }
+
+            EditorGUILayout.LabelField(MapNameHint, EditorStyles.wordWrappedMiniLabel);
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField(OptionsHeading, EditorStyles.boldLabel);
+
             var eyes = EditorGUILayout.Toggle(OverrideEyesLabel, receiver.overrideEyes);
-            if (eyes != receiver.overrideEyes)
+            if (change == ChangeKind.None && eyes != receiver.overrideEyes)
             {
                 change = ChangeKind.OverrideEyes;
                 changeBool = eyes;
@@ -189,9 +227,26 @@ namespace Poyo.Kaotsuki.Editor
                     }
 
                     EditorGUILayout.BeginHorizontal();
-                    var allOn = GUILayout.Button(AllOnLabel);
-                    var allOff = GUILayout.Button(AllOffLabel);
+                    bool allOn;
+                    bool allOff;
+                    using (new EditorGUI.DisabledScope(view.EditSeparators))
+                    {
+                        allOn = GUILayout.Button(AllOnLabel);
+                        allOff = GUILayout.Button(AllOffLabel);
+                    }
+
+                    var editSeparators = GUILayout.Toggle(view.EditSeparators, EditSeparatorsLabel, GUI.skin.button);
                     EditorGUILayout.EndHorizontal();
+                    if (editSeparators != view.EditSeparators)
+                    {
+                        view.EditSeparators = editSeparators;
+                        UpdateVisibility(view);
+                    }
+
+                    if (view.EditSeparators)
+                    {
+                        EditorGUILayout.HelpBox(EditSeparatorsHelp, MessageType.Info);
+                    }
 
                     var search = EditorGUILayout.TextField(SearchLabel, view.Search);
                     if (!string.Equals(search, view.Search, StringComparison.Ordinal))
@@ -201,22 +256,53 @@ namespace Poyo.Kaotsuki.Editor
                     }
 
                     view.Scroll = EditorGUILayout.BeginScrollView(view.Scroll, ScrollOptions);
-                    for (var blendShapeIndex = 0; blendShapeIndex < view.Labels.Length; blendShapeIndex++)
+                    if (view.EditSeparators || view.Search.Length != 0 || view.Groups.Length == 0)
                     {
-                        if (!view.Visible[blendShapeIndex])
+                        for (var blendShapeIndex = 0; blendShapeIndex < view.Labels.Length; blendShapeIndex++)
                         {
-                            continue;
-                        }
+                            if (!view.Visible[blendShapeIndex])
+                            {
+                                continue;
+                            }
 
-                        var enabled = EditorGUILayout.ToggleLeft(
-                            view.Labels[blendShapeIndex],
-                            view.Enabled[blendShapeIndex]);
-                        if (change == ChangeKind.None && enabled != view.Enabled[blendShapeIndex])
+                            var previous = view.EditSeparators ? view.Separator[blendShapeIndex] : view.Enabled[blendShapeIndex];
+                            var enabled = EditorGUILayout.ToggleLeft(
+                                view.EditSeparators ? view.EditLabels[blendShapeIndex] : view.Labels[blendShapeIndex], previous);
+                            if (change == ChangeKind.None && enabled != previous)
+                            {
+                                change = view.EditSeparators ? ChangeKind.SetSeparator : ChangeKind.SetBlendShape;
+                                changeMeshIndex = i;
+                                changeBlendShape = blendShapeIndex;
+                                changeBool = enabled;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        DrawMembers(view, view.Ungrouped, i, ref change, ref changeMeshIndex, ref changeBlendShape, ref changeBool);
+                        for (var groupIndex = 0; groupIndex < view.Groups.Length; groupIndex++)
                         {
-                            change = ChangeKind.SetBlendShape;
-                            changeMeshIndex = i;
-                            changeBlendShape = blendShapeIndex;
-                            changeBool = enabled;
+                            var group = view.Groups[groupIndex];
+                            EditorGUILayout.BeginHorizontal();
+                            group.Expanded = EditorGUILayout.Foldout(group.Expanded, group.Label, true);
+                            EditorGUILayout.LabelField(group.Count, CountLabelOptions);
+                            var groupOn = GUILayout.Button(GroupOnLabel, GroupButtonOptions);
+                            var groupOff = GUILayout.Button(GroupOffLabel, GroupButtonOptions);
+                            EditorGUILayout.EndHorizontal();
+                            if (change == ChangeKind.None && (groupOn || groupOff))
+                            {
+                                change = ChangeKind.SetGroup;
+                                changeMeshIndex = i;
+                                changeGroupIndex = groupIndex;
+                                changeBool = groupOn;
+                            }
+
+                            if (group.Expanded)
+                            {
+                                EditorGUI.indentLevel++;
+                                DrawMembers(view, group.Members, i, ref change, ref changeMeshIndex, ref changeBlendShape, ref changeBool);
+                                EditorGUI.indentLevel--;
+                            }
                         }
                     }
 
@@ -259,6 +345,11 @@ namespace Poyo.Kaotsuki.Editor
                 {
                     action = ActionKind.OpenFolder;
                 }
+
+                if (GUILayout.Button(CreateClipLabel))
+                {
+                    action = ActionKind.CreateClip;
+                }
             }
 
             ApplyChange(
@@ -267,8 +358,26 @@ namespace Poyo.Kaotsuki.Editor
                 changeMeshIndex,
                 changeBlendShape,
                 changeBool,
-                changeRenderer);
+                changeRenderer,
+                changeGroupIndex,
+                changeString);
             ApplyAction(action);
+        }
+
+        private static void DrawMembers(MeshView view, int[] members, int meshIndex,
+            ref ChangeKind change, ref int changeMeshIndex, ref int changeBlendShape, ref bool changeBool)
+        {
+            foreach (var index in members)
+            {
+                var enabled = EditorGUILayout.ToggleLeft(view.Labels[index], view.Enabled[index]);
+                if (change == ChangeKind.None && enabled != view.Enabled[index])
+                {
+                    change = ChangeKind.SetBlendShape;
+                    changeMeshIndex = meshIndex;
+                    changeBlendShape = index;
+                    changeBool = enabled;
+                }
+            }
         }
 
         private bool CacheNeedsRebuild(KaotsukiReceiver receiver)
@@ -300,7 +409,9 @@ namespace Poyo.Kaotsuki.Editor
             int meshIndex,
             int blendShapeIndex,
             bool boolValue,
-            SkinnedMeshRenderer renderer)
+            SkinnedMeshRenderer renderer,
+            int groupIndex,
+            string stringValue)
         {
             if (kind == ChangeKind.None)
             {
@@ -325,6 +436,9 @@ namespace Poyo.Kaotsuki.Editor
             Undo.RecordObject(receiver, "Kaotsuki");
             switch (kind)
             {
+                case ChangeKind.MapName:
+                    receiver.mapName = stringValue.Trim();
+                    break;
                 case ChangeKind.OverrideEyes:
                     receiver.overrideEyes = boolValue;
                     break;
@@ -344,7 +458,17 @@ namespace Poyo.Kaotsuki.Editor
                         boolValue);
                     break;
                 case ChangeKind.SetAll:
-                    SetAll(receiver.meshes[meshIndex], boolValue);
+                    SetAll(receiver.meshes[meshIndex], _views[meshIndex], boolValue);
+                    break;
+                case ChangeKind.SetSeparator:
+                    KaotsukiSeparators.SetSeparator(receiver.meshes[meshIndex],
+                        _views[meshIndex].Labels[blendShapeIndex].text, boolValue);
+                    break;
+                case ChangeKind.SetGroup:
+                    foreach (var member in _views[meshIndex].Groups[groupIndex].Members)
+                    {
+                        SetBlendShape(receiver.meshes[meshIndex], _views[meshIndex].Labels[member].text, boolValue);
+                    }
                     break;
                 case ChangeKind.AddMesh:
                     if (receiver.meshes == null)
@@ -388,7 +512,7 @@ namespace Poyo.Kaotsuki.Editor
             }
         }
 
-        private static void SetAll(KaotsukiMeshEntry entry, bool enabled)
+        private static void SetAll(KaotsukiMeshEntry entry, MeshView view, bool enabled)
         {
             if (entry.excludedBlendShapes == null)
             {
@@ -398,6 +522,11 @@ namespace Poyo.Kaotsuki.Editor
             var mesh = entry.renderer.sharedMesh;
             for (var i = 0; i < mesh.blendShapeCount; i++)
             {
+                if (view.Separator[i])
+                {
+                    continue;
+                }
+
                 var name = mesh.GetBlendShapeName(i);
                 if (enabled)
                 {
@@ -447,6 +576,12 @@ namespace Poyo.Kaotsuki.Editor
                 case ActionKind.OpenFolder:
                     KaotsukiSenderLauncher.OpenMapFolder();
                     break;
+                case ActionKind.CreateClip:
+                    if (KaotsukiExpressionClipWriter.Run((KaotsukiReceiver)target, _avatarRoot))
+                    {
+                        GUIUtility.ExitGUI();
+                    }
+                    break;
             }
         }
 
@@ -464,7 +599,13 @@ namespace Poyo.Kaotsuki.Editor
 
             try
             {
-                return KaotsukiMapWriter.Write(table, _avatarRoot.gameObject);
+                var result = KaotsukiMapWriter.Write(table, receiver, _avatarRoot.gameObject);
+                if (result.RemovedOtherAvatars)
+                {
+                    Debug.LogWarning("[Kaotsuki] " + string.Format(KaotsukiErrors.MapSharedDetail, result.MapName));
+                }
+
+                return result.Path;
             }
             catch (Exception e)
             {
@@ -514,13 +655,20 @@ namespace Poyo.Kaotsuki.Editor
                     Expanded = i == expandIndex || old != null && old.Expanded,
                     Search = old == null ? string.Empty : old.Search,
                     Scroll = old == null ? Vector2.zero : old.Scroll,
+                    EditSeparators = old != null && old.EditSeparators,
                 };
 
                 var total = mesh == null ? 0 : mesh.blendShapeCount;
                 var registered = 0;
+                var operable = 0;
                 view.Labels = new GUIContent[total];
+                view.EditLabels = new GUIContent[total];
                 view.Enabled = new bool[total];
                 view.Visible = new bool[total];
+                view.Separator = KaotsukiSeparators.Resolve(mesh, entry);
+                var ungrouped = new List<int>();
+                var groups = new List<GroupView>();
+                var members = new List<List<int>>();
                 var excluded = entry == null || entry.excludedBlendShapes == null
                     ? null
                     : new HashSet<string>(entry.excludedBlendShapes);
@@ -529,14 +677,53 @@ namespace Poyo.Kaotsuki.Editor
                     var name = mesh.GetBlendShapeName(blendShapeIndex);
                     var enabled = excluded == null || !excluded.Contains(name);
                     view.Labels[blendShapeIndex] = new GUIContent(name);
+                    view.EditLabels[blendShapeIndex] = KaotsukiSeparators.IsAutoSeparator(name)
+                        ? new GUIContent(name + "（自動）")
+                        : view.Labels[blendShapeIndex];
                     view.Enabled[blendShapeIndex] = enabled;
+                    if (view.Separator[blendShapeIndex])
+                    {
+                        groups.Add(new GroupView { Label = new GUIContent(KaotsukiSeparators.GroupName(name)) });
+                        members.Add(new List<int>());
+                        continue;
+                    }
+
+                    if (groups.Count == 0)
+                    {
+                        ungrouped.Add(blendShapeIndex);
+                    }
+                    else
+                    {
+                        members[members.Count - 1].Add(blendShapeIndex);
+                    }
+
+                    operable++;
                     if (enabled)
                     {
                         registered++;
                     }
                 }
 
-                view.Header = new GUIContent("登録数 " + registered + " / " + total);
+                view.Ungrouped = ungrouped.ToArray();
+                view.Groups = groups.ToArray();
+                for (var groupIndex = 0; groupIndex < view.Groups.Length; groupIndex++)
+                {
+                    var group = view.Groups[groupIndex];
+                    group.Members = members[groupIndex].ToArray();
+                    var enabledCount = 0;
+                    foreach (var member in group.Members)
+                    {
+                        if (view.Enabled[member])
+                        {
+                            enabledCount++;
+                        }
+                    }
+
+                    group.Count = new GUIContent(enabledCount + " / " + group.Members.Length);
+                    group.Expanded = old != null && old.Groups.Length == view.Groups.Length && old.Groups[groupIndex].Expanded;
+                }
+
+                view.Header = new GUIContent("登録数 " + registered + " / " + operable);
                 UpdateVisibility(view);
                 _views.Add(view);
             }
@@ -546,8 +733,9 @@ namespace Poyo.Kaotsuki.Editor
         {
             for (var i = 0; i < view.Visible.Length; i++)
             {
-                view.Visible[i] = view.Search.Length == 0 ||
-                                  view.Labels[i].text.IndexOf(view.Search, StringComparison.OrdinalIgnoreCase) >= 0;
+                view.Visible[i] = (view.EditSeparators || !view.Separator[i]) &&
+                                  (view.Search.Length == 0 ||
+                                   view.Labels[i].text.IndexOf(view.Search, StringComparison.OrdinalIgnoreCase) >= 0);
             }
         }
     }

@@ -29,6 +29,7 @@ namespace Poyo.Kaotsuki.Editor
     internal sealed class KaotsukiMapParameters
     {
         public string enabled = KaotsukiInfo.ParamEnabled;
+        public string lipSync = KaotsukiInfo.ParamLipSync;
         public List<KaotsukiMapChannel> channels = new List<KaotsukiMapChannel>();
     }
 

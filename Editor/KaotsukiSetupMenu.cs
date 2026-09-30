@@ -1,11 +1,9 @@
 using System;
 using System.Collections.Generic;
 using nadena.dev.modular_avatar.core;
-using nadena.dev.modular_avatar.core.menu;
 using UnityEditor;
 using UnityEngine;
 using VRC.SDK3.Avatars.Components;
-using VRC.SDK3.Avatars.ScriptableObjects;
 using Object = UnityEngine.Object;
 
 namespace Poyo.Kaotsuki.Editor
@@ -50,17 +48,7 @@ namespace Poyo.Kaotsuki.Editor
                 // NOTE: 通常の Modular Avatar の手順で、利用者がメニューの置き場所を変えられるようにする。
                 go.AddComponent<ModularAvatarMenuInstaller>();
                 var item = go.AddComponent<ModularAvatarMenuItem>();
-                item.Control = new VRCExpressionsMenu.Control
-                {
-                    name = "Kaotsuki",
-                    type = VRCExpressionsMenu.Control.ControlType.Toggle,
-                    parameter = new VRCExpressionsMenu.Control.Parameter { name = KaotsukiInfo.ParamEnabled },
-                    value = 1f,
-                };
-                item.MenuSource = SubmenuSource.Children;
-                item.isSynced = true;
-                item.isSaved = false;
-                item.isDefault = false;
+                KaotsukiMenuUpgrader.BuildSubMenu(item, "Kaotsuki Setup");
 
                 var body = FindBody(root);
                 if (body != null)

@@ -13,7 +13,6 @@ namespace Poyo.Kaotsuki.Editor
             None,
             MapName,
             OverrideEyes,
-            OverrideMouth,
             Renderer,
             RemoveMesh,
             SetBlendShape,
@@ -38,6 +37,7 @@ namespace Poyo.Kaotsuki.Editor
         private sealed class MeshView
         {
             internal Mesh Mesh;
+            internal string[] Names = Array.Empty<string>();
             internal GUIContent[] Labels = Array.Empty<GUIContent>();
             internal bool[] Enabled = Array.Empty<bool>();
             internal GUIContent Header = Empty;
@@ -71,7 +71,8 @@ namespace Poyo.Kaotsuki.Editor
         private static readonly GUIContent OptionsHeading = new GUIContent("オプション");
         private static readonly GUIContent MeshesHeading = new GUIContent("メッシュ");
         private static readonly GUIContent OverrideEyesLabel = new GUIContent("ON の間まばたき・視線を止める");
-        private static readonly GUIContent OverrideMouthLabel = new GUIContent("ON の間リップシンクを止める");
+        private static readonly GUIContent UpgradeMenuLabel = new GUIContent("メニューに口パクを追加");
+        private const string UpgradeMenuHelp = "Expression Menu に口パクの切り替えがありません。";
         private static readonly GUIContent AllOnLabel = new GUIContent("すべて ON");
         private static readonly GUIContent AllOffLabel = new GUIContent("すべて OFF");
         private static readonly GUIContent SearchLabel = new GUIContent("検索");
@@ -92,6 +93,7 @@ namespace Poyo.Kaotsuki.Editor
         private string _truncatedMessage;
         private string _skippedMessage;
         private Transform _avatarRoot;
+        private bool _needsMenuUpgrade;
 
         private void OnEnable()
         {
@@ -146,6 +148,17 @@ namespace Poyo.Kaotsuki.Editor
                 EditorGUILayout.HelpBox(_skippedMessage, MessageType.Warning);
             }
 
+            if (_needsMenuUpgrade)
+            {
+                EditorGUILayout.HelpBox(UpgradeMenuHelp, MessageType.Info);
+                if (GUILayout.Button(UpgradeMenuLabel))
+                {
+                    KaotsukiMenuUpgrader.Upgrade(receiver);
+                    RebuildCache();
+                    GUIUtility.ExitGUI();
+                }
+            }
+
             var change = ChangeKind.None;
             var changeMeshIndex = -1;
             var changeBlendShape = -1;
@@ -173,13 +186,6 @@ namespace Poyo.Kaotsuki.Editor
             {
                 change = ChangeKind.OverrideEyes;
                 changeBool = eyes;
-            }
-
-            var mouth = EditorGUILayout.Toggle(OverrideMouthLabel, receiver.overrideMouth);
-            if (change == ChangeKind.None && mouth != receiver.overrideMouth)
-            {
-                change = ChangeKind.OverrideMouth;
-                changeBool = mouth;
             }
 
             EditorGUILayout.Space();
@@ -442,9 +448,6 @@ namespace Poyo.Kaotsuki.Editor
                 case ChangeKind.OverrideEyes:
                     receiver.overrideEyes = boolValue;
                     break;
-                case ChangeKind.OverrideMouth:
-                    receiver.overrideMouth = boolValue;
-                    break;
                 case ChangeKind.Renderer:
                     EnsureEntry(receiver, meshIndex).renderer = renderer;
                     break;
@@ -454,7 +457,7 @@ namespace Poyo.Kaotsuki.Editor
                 case ChangeKind.SetBlendShape:
                     SetBlendShape(
                         receiver.meshes[meshIndex],
-                        _views[meshIndex].Labels[blendShapeIndex].text,
+                        _views[meshIndex].Names[blendShapeIndex],
                         boolValue);
                     break;
                 case ChangeKind.SetAll:
@@ -462,12 +465,12 @@ namespace Poyo.Kaotsuki.Editor
                     break;
                 case ChangeKind.SetSeparator:
                     KaotsukiSeparators.SetSeparator(receiver.meshes[meshIndex],
-                        _views[meshIndex].Labels[blendShapeIndex].text, boolValue);
+                        _views[meshIndex].Names[blendShapeIndex], boolValue);
                     break;
                 case ChangeKind.SetGroup:
                     foreach (var member in _views[meshIndex].Groups[groupIndex].Members)
                     {
-                        SetBlendShape(receiver.meshes[meshIndex], _views[meshIndex].Labels[member].text, boolValue);
+                        SetBlendShape(receiver.meshes[meshIndex], _views[meshIndex].Names[member], boolValue);
                     }
                     break;
                 case ChangeKind.AddMesh:
@@ -527,7 +530,7 @@ namespace Poyo.Kaotsuki.Editor
                     continue;
                 }
 
-                var name = mesh.GetBlendShapeName(i);
+                var name = view.Names[i];
                 if (enabled)
                 {
                     entry.excludedBlendShapes.Remove(name);
@@ -622,8 +625,10 @@ namespace Poyo.Kaotsuki.Editor
             _views.Clear();
             _avatarRoot = KaotsukiSlotTable.FindAvatarRoot(receiver);
             _table = KaotsukiSlotTable.Build(receiver, _avatarRoot);
+            var tracking = KaotsukiTrackingShapes.Resolve(_avatarRoot);
+            _needsMenuUpgrade = KaotsukiMenuUpgrader.NeedsUpgrade(receiver);
             var channelCount = _table.ChannelCount;
-            var syncBits = 1 + 16 * channelCount;
+            var syncBits = KaotsukiInfo.FixedSyncBits + 16 * channelCount;
             _countLabel = new GUIContent(channelCount == 0
                 ? "登録数: 0"
                 : "登録数: " + _table.RegisteredCount + "（枠 " + channelCount + "・同期 " + syncBits + " bit）");
@@ -661,6 +666,7 @@ namespace Poyo.Kaotsuki.Editor
                 var total = mesh == null ? 0 : mesh.blendShapeCount;
                 var registered = 0;
                 var operable = 0;
+                view.Names = new string[total];
                 view.Labels = new GUIContent[total];
                 view.EditLabels = new GUIContent[total];
                 view.Enabled = new bool[total];
@@ -676,10 +682,14 @@ namespace Poyo.Kaotsuki.Editor
                 {
                     var name = mesh.GetBlendShapeName(blendShapeIndex);
                     var enabled = excluded == null || !excluded.Contains(name);
-                    view.Labels[blendShapeIndex] = new GUIContent(name);
+                    view.Names[blendShapeIndex] = name;
+                    var kind = tracking.KindOf(renderer, name);
+                    view.Labels[blendShapeIndex] = new GUIContent(kind == KaotsukiTrackingKind.LipSync
+                        ? name + "（口パク）"
+                        : kind == KaotsukiTrackingKind.Eyelid ? name + "（まばたき）" : name);
                     view.EditLabels[blendShapeIndex] = KaotsukiSeparators.IsAutoSeparator(name)
                         ? new GUIContent(name + "（自動）")
-                        : view.Labels[blendShapeIndex];
+                        : new GUIContent(name);
                     view.Enabled[blendShapeIndex] = enabled;
                     if (view.Separator[blendShapeIndex])
                     {
@@ -735,7 +745,7 @@ namespace Poyo.Kaotsuki.Editor
             {
                 view.Visible[i] = (view.EditSeparators || !view.Separator[i]) &&
                                   (view.Search.Length == 0 ||
-                                   view.Labels[i].text.IndexOf(view.Search, StringComparison.OrdinalIgnoreCase) >= 0);
+                                   view.Names[i].IndexOf(view.Search, StringComparison.OrdinalIgnoreCase) >= 0);
             }
         }
     }

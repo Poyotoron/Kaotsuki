@@ -7,6 +7,7 @@ namespace Poyo.Kaotsuki.Editor
         internal const string DisplayName = "Kaotsuki";
 
         internal const string ParamEnabled = "Kaotsuki/Enabled";
+        internal const string ParamLipSync = "Kaotsuki/LipSync";
         internal const string ParamIndex = "Kaotsuki/Index";
         internal const string ParamValue = "Kaotsuki/Value";
 
@@ -14,8 +15,9 @@ namespace Poyo.Kaotsuki.Editor
         internal const string ParamSlotPrefix = "Kaotsuki/Slot/";
 
         internal const int SlotsPerChannel = 255;
-        // NOTE: 同期パラメータの上限 256 bit に、Enabled（1 bit）と Index + Value（16 bit）の組が収まる最大数。
+        // NOTE: 同期パラメータの上限 256 bit に、Enabled と LipSync（2 bit）と Index + Value（16 bit）の組が収まる最大数。
         internal const int MaxChannels = 15;
+        internal const int FixedSyncBits = 2;
         internal const int MaxSlots = SlotsPerChannel * MaxChannels;
         internal const int ValueMax = 255;
 

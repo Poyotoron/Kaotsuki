@@ -386,6 +386,7 @@ elements.search.addEventListener('input', () => {
   const active = query.length !== 0;
   if (active && !searching) {
     for (const mesh of meshViews) {
+      savedOpen.set(mesh.details, mesh.details.open);
       for (const group of mesh.groups) {
         savedOpen.set(group.details, group.details.open);
       }
@@ -402,6 +403,8 @@ elements.search.addEventListener('input', () => {
     mesh.details.hidden = active && visible === 0;
     if (active && visible > 0) {
       mesh.details.open = true;
+    } else if (!active) {
+      mesh.details.open = savedOpen.get(mesh.details) ?? mesh.details.open;
     }
   }
   if (!active) {

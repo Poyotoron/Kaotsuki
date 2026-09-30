@@ -1,12 +1,15 @@
 use crate::{commands, map, scheduler::Scheduler};
 use rosc::{OscPacket, OscType};
 use serde::Serialize;
+use std::io::ErrorKind;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
+
+const RECEIVE_ERROR_WAIT: Duration = Duration::from_millis(50);
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -48,8 +51,21 @@ impl Receiver {
                 let mut buffer = [0u8; 65535];
                 while !thread_stop.load(Ordering::Relaxed) {
                     // NOTE: タイムアウトのほか、Windows では UDP の相手が閉じたときに接続リセットも返るため、次のパケットを待ち続ける。
-                    let Ok((size, _)) = socket.recv_from(&mut buffer) else {
-                        continue;
+                    // NOTE: タイムアウト以外のエラーが続いても CPU を使い切らないように、少し待ってから次を待つ。
+                    let (size, _) = match socket.recv_from(&mut buffer) {
+                        Ok(received) => received,
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                ErrorKind::WouldBlock | ErrorKind::TimedOut
+                            ) =>
+                        {
+                            continue;
+                        }
+                        Err(_) => {
+                            std::thread::sleep(RECEIVE_ERROR_WAIT);
+                            continue;
+                        }
                     };
                     let Ok((_, packet)) = rosc::decoder::decode_udp(&buffer[..size]) else {
                         continue;

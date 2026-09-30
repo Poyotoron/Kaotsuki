@@ -153,13 +153,21 @@ pub fn save_settings(
         .lock()
         .map_err(|_| "送り手の状態を更新できません".to_string())?
         .set_target(target, Duration::from_millis(settings.hold_ms));
+    // NOTE: ポートを使っていたアプリを閉じた後、設定を保存し直すだけで受信を再開できるようにする。
+    let retry = settings.receive
+        && state
+            .receive_status
+            .lock()
+            .map(|status| status.state == "failed")
+            .unwrap_or(false);
     let changed = {
         let mut previous = state
             .settings
             .lock()
             .map_err(|_| "設定を更新できません".to_string())?;
-        let changed =
-            previous.receive != settings.receive || previous.receive_port != settings.receive_port;
+        let changed = previous.receive != settings.receive
+            || previous.receive_port != settings.receive_port
+            || retry;
         *previous = settings.clone();
         changed
     };

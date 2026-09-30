@@ -90,11 +90,22 @@ impl Receiver {
                                 );
                             }
                             Incoming::Bool { address, value } => {
-                                let changed = scheduler.lock().ok().and_then(|mut scheduler| {
-                                    scheduler.receive_enabled(&address, value, Instant::now())
-                                });
-                                if let Some(enabled) = changed {
+                                let (enabled, lip_sync) = scheduler
+                                    .lock()
+                                    .ok()
+                                    .map(|mut scheduler| {
+                                        let now = Instant::now();
+                                        (
+                                            scheduler.receive_enabled(&address, value, now),
+                                            scheduler.receive_lip_sync(&address, value, now),
+                                        )
+                                    })
+                                    .unwrap_or((None, None));
+                                if let Some(enabled) = enabled {
                                     let _ = app.emit("enabled-changed", enabled);
+                                }
+                                if let Some(lip_sync) = lip_sync {
+                                    let _ = app.emit("lipsync-changed", lip_sync);
                                 }
                             }
                         }

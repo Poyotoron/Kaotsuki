@@ -203,6 +203,24 @@ pub fn get_enabled(state: State<'_, AppState>) -> bool {
 }
 
 #[tauri::command]
+pub fn set_lip_sync(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    state
+        .scheduler
+        .lock()
+        .map_err(|_| "送り手の状態を更新できません".to_string())?
+        .set_lip_sync(enabled)
+}
+
+#[tauri::command]
+pub fn get_lip_sync(state: State<'_, AppState>) -> bool {
+    state
+        .scheduler
+        .lock()
+        .map(|scheduler| scheduler.lip_sync())
+        .unwrap_or(false)
+}
+
+#[tauri::command]
 pub fn reset(state: State<'_, AppState>) -> Result<(), String> {
     state
         .scheduler

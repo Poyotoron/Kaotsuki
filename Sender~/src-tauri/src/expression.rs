@@ -193,6 +193,7 @@ mod tests {
                 avatars: Vec::new(),
                 generated_at: String::new(),
                 channel_count: 1,
+                has_lip_sync: false,
                 slots: vec![
                     slot(1, "Body", "a"),
                     slot(2, "Body", "b"),

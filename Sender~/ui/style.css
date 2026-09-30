@@ -161,6 +161,10 @@ header,
   background: var(--surface);
 }
 
+.action-buttons {
+  flex-wrap: wrap;
+}
+
 .target {
   min-width: 0;
   justify-content: flex-end;

@@ -57,6 +57,8 @@ fn main() {
             commands::set_slot,
             commands::set_enabled,
             commands::get_enabled,
+            commands::set_lip_sync,
+            commands::get_lip_sync,
             commands::get_receive_status,
             commands::expression_folder,
             commands::save_expression,

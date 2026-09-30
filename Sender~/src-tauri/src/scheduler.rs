@@ -102,6 +102,8 @@ pub struct Scheduler {
     target: SocketAddr,
     hold: Duration,
     enabled_address: Option<String>,
+    lip_sync_address: Option<String>,
+    lip_sync: bool,
     channels: Vec<Channel>,
     pending_enable_at: Option<Instant>,
     enabled: bool,
@@ -116,6 +118,8 @@ impl Scheduler {
             target,
             hold,
             enabled_address: None,
+            lip_sync_address: None,
+            lip_sync: false,
             channels: Vec::new(),
             pending_enable_at: None,
             enabled: true,
@@ -126,6 +130,9 @@ impl Scheduler {
 
     pub fn apply_map(&mut self, map: &MapView, params: ParamNames) -> Result<(), String> {
         self.enabled_address = Some(params.enabled);
+        self.lip_sync_address = params.lip_sync;
+        // NOTE: LipSync は保存されないので、アバターを読み込むと false から始まる。送り手の表示もそれに合わせる。
+        self.lip_sync = false;
         self.channels = params.channels.into_iter().map(Channel::new).collect();
         for slot in &map.slots {
             if slot.channel == 0 {
@@ -167,6 +174,30 @@ impl Scheduler {
 
     pub fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    pub fn lip_sync(&self) -> bool {
+        self.lip_sync
+    }
+
+    pub fn set_lip_sync(&mut self, value: bool) -> Result<(), String> {
+        let Some(address) = self.lip_sync_address.as_ref() else {
+            return Ok(());
+        };
+        self.lip_sync = value;
+        self.ignore_enabled_until = Some(Instant::now() + ENABLED_ECHO_GUARD);
+        self.osc.send_bool(self.target, address, value)
+    }
+
+    pub fn receive_lip_sync(&mut self, address: &str, value: bool, now: Instant) -> Option<bool> {
+        if self.lip_sync_address.as_deref() != Some(address)
+            || self.ignore_enabled_until.is_some_and(|until| now < until)
+            || value == self.lip_sync
+        {
+            return None;
+        }
+        self.lip_sync = value;
+        Some(value)
     }
 
     pub fn desired(&self, channel: u8, index: u8) -> Option<u8> {
@@ -217,6 +248,7 @@ impl Scheduler {
 
     // NOTE: Enabled は保存されないので、アバターを読み込むと OFF・既定値から始まる。トグルが ON なら送り手が ON に戻す。
     pub fn avatar_changed(&mut self, now: Instant) {
+        self.lip_sync = false;
         self.reset_channels(now);
         self.pending_enable_at = self.enabled.then_some(now + AVATAR_CHANGE_DELAY);
         self.ignore_enabled_until = Some(now + AVATAR_CHANGE_GUARD);
@@ -338,10 +370,12 @@ mod tests {
                     avatars: Vec::new(),
                     generated_at: String::new(),
                     channel_count: 1,
+                    has_lip_sync: false,
                     slots: vec![slot(1, 3), slot(1, 7)],
                 },
                 ParamNames {
                     enabled: "/enabled".to_string(),
+                    lip_sync: None,
                     channels: vec![addresses("/index", "/value")],
                 },
             )
@@ -467,12 +501,14 @@ mod tests {
                     avatar_name: "Test".to_string(),
                     generated_at: String::new(),
                     channel_count: 2,
+                    has_lip_sync: false,
                     map_name: "Test".to_string(),
                     avatars: Vec::new(),
                     slots: vec![slot(1, 3), slot(2, 1)],
                 },
                 ParamNames {
                     enabled: "/enabled".to_string(),
+                    lip_sync: None,
                     channels: vec![
                         addresses("/index", "/value"),
                         addresses("/index2", "/value2"),
@@ -611,6 +647,7 @@ mod tests {
             avatars: Vec::new(),
             generated_at: String::new(),
             channel_count: 1,
+            has_lip_sync: false,
             slots: vec![slot(1, 7)],
         };
         scheduler
@@ -618,6 +655,7 @@ mod tests {
                 &map,
                 ParamNames {
                     enabled: "/new-enabled".to_string(),
+                    lip_sync: None,
                     channels: vec![addresses("/index", "/value")],
                 },
             )
@@ -628,5 +666,103 @@ mod tests {
             receive(&receiver),
             ("/new-enabled".to_string(), OscType::Bool(true))
         );
+    }
+
+    fn apply_lip_sync_map(scheduler: &mut Scheduler, address: Option<&str>) {
+        scheduler
+            .apply_map(
+                &MapView {
+                    path: String::new(),
+                    avatar_name: "Test".into(),
+                    map_name: "Test".into(),
+                    avatars: Vec::new(),
+                    generated_at: String::new(),
+                    channel_count: 1,
+                    has_lip_sync: address.is_some(),
+                    slots: vec![slot(1, 3)],
+                },
+                ParamNames {
+                    enabled: "/enabled".into(),
+                    lip_sync: address.map(str::to_string),
+                    channels: vec![addresses("/index", "/value")],
+                },
+            )
+            .expect("apply map");
+    }
+
+    #[test]
+    fn lip_sync_is_sent() {
+        let (mut scheduler, receiver, _) = setup();
+        assert!(!scheduler.lip_sync());
+        apply_lip_sync_map(&mut scheduler, Some("/lipsync"));
+        assert_eq!(receive(&receiver), ("/enabled".into(), OscType::Bool(true)));
+        assert_no_packet(&receiver);
+        scheduler.set_lip_sync(true).expect("lip sync");
+        assert_eq!(receive(&receiver), ("/lipsync".into(), OscType::Bool(true)));
+        assert!(scheduler.lip_sync());
+        apply_lip_sync_map(&mut scheduler, Some("/lipsync"));
+        assert!(!scheduler.lip_sync());
+        assert_eq!(receive(&receiver), ("/enabled".into(), OscType::Bool(true)));
+        assert_no_packet(&receiver);
+        scheduler.set_enabled(false).expect("disable");
+        receive(&receiver);
+        scheduler.set_lip_sync(true).expect("lip sync while off");
+        assert_eq!(receive(&receiver), ("/lipsync".into(), OscType::Bool(true)));
+        assert!(!scheduler.enabled());
+        scheduler.avatar_changed(Instant::now());
+        assert!(!scheduler.lip_sync());
+        assert_no_packet(&receiver);
+    }
+
+    #[test]
+    fn lip_sync_without_address_sends_nothing() {
+        let (mut scheduler, receiver, start) = setup();
+        scheduler.set_lip_sync(true).expect("legacy lip sync");
+        assert!(!scheduler.lip_sync());
+        assert_eq!(
+            scheduler.receive_lip_sync("/lipsync", true, start + Duration::from_secs(10)),
+            None
+        );
+        assert_no_packet(&receiver);
+    }
+
+    #[test]
+    fn received_lip_sync_is_mirrored() {
+        let (mut scheduler, receiver, start) = setup();
+        apply_lip_sync_map(&mut scheduler, Some("/lipsync"));
+        receive(&receiver);
+        assert_eq!(
+            scheduler.receive_lip_sync("/other", true, start + Duration::from_secs(10)),
+            None
+        );
+        assert_eq!(
+            scheduler.receive_lip_sync("/lipsync", true, start + Duration::from_secs(10)),
+            Some(true)
+        );
+        assert!(scheduler.lip_sync());
+        assert_eq!(
+            scheduler.receive_lip_sync("/lipsync", true, start + Duration::from_secs(10)),
+            None
+        );
+        assert_no_packet(&receiver);
+        scheduler.set_lip_sync(false).expect("lip sync");
+        receive(&receiver);
+        assert_eq!(
+            scheduler.receive_lip_sync(
+                "/lipsync",
+                true,
+                Instant::now() + Duration::from_millis(100)
+            ),
+            None
+        );
+        assert_eq!(
+            scheduler.receive_enabled(
+                "/enabled",
+                false,
+                Instant::now() + Duration::from_millis(100)
+            ),
+            None
+        );
+        assert!(!scheduler.lip_sync());
     }
 }

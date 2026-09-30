@@ -10,6 +10,8 @@ const elements = {
   receiveInfo: document.querySelector('#receive-info'),
   toggle: document.querySelector('#toggle-enabled'),
   toggleText: document.querySelector('#toggle-enabled .switch-text'),
+  lipSync: document.querySelector('#toggle-lipsync'),
+  lipSyncText: document.querySelector('#toggle-lipsync .switch-text'),
   reset: document.querySelector('#btn-reset'),
   saveExpression: document.querySelector('#btn-save-expression'),
   loadExpression: document.querySelector('#btn-load-expression'),
@@ -63,6 +65,15 @@ function renderEnabled(enabled) {
   elements.toggleText.textContent = enabled ? 'ON' : 'OFF';
 }
 
+function renderLipSync(value) {
+  elements.lipSync.setAttribute('aria-checked', String(value));
+  elements.lipSyncText.textContent = value ? 'ON' : 'OFF';
+}
+
+function updateLipSyncAvailability() {
+  elements.lipSync.disabled = !currentMap || !currentMap.hasLipSync;
+}
+
 function renderReceiveStatus(status) {
   if (status.state === 'listening') {
     elements.receiveInfo.textContent = `VRChat から受信中（ポート ${status.port}）`;
@@ -114,6 +125,8 @@ async function loadMap(path) {
   try {
     const map = await invoke('load_map', { path });
     currentMap = map;
+    renderLipSync(false);
+    updateLipSyncAvailability();
     settings.lastMapPath = path;
     renderSlots(map);
     elements.mapInfo.textContent = map.channelCount >= 2
@@ -372,6 +385,20 @@ elements.toggle.addEventListener('click', async () => {
   }
 });
 
+elements.lipSync.addEventListener('click', async () => {
+  try {
+    await invoke('set_lip_sync', { enabled: elements.lipSync.getAttribute('aria-checked') !== 'true' });
+  } catch (error) {
+    showError(errorMessage(error));
+  } finally {
+    try {
+      renderLipSync(await invoke('get_lip_sync'));
+    } catch (error) {
+      showError(errorMessage(error));
+    }
+  }
+});
+
 elements.reset.addEventListener('click', async () => {
   try {
     await invoke('reset');
@@ -461,7 +488,9 @@ async function initialize() {
     settings = await invoke('get_settings');
     await listen('receive-status', (event) => renderReceiveStatus(event.payload));
     await listen('enabled-changed', (event) => renderEnabled(event.payload));
+    await listen('lipsync-changed', (event) => renderLipSync(event.payload));
     await listen('avatar-changed', async (event) => {
+      renderLipSync(false);
       const { avatarId, mapPath } = event.payload;
       if (mapPath && (!currentMap || currentMap.path !== mapPath)) {
         await loadMap(mapPath);
@@ -473,6 +502,8 @@ async function initialize() {
       }
     });
     renderEnabled(await invoke('get_enabled'));
+    renderLipSync(await invoke('get_lip_sync'));
+    updateLipSyncAvailability();
     renderReceiveStatus(await invoke('get_receive_status'));
     updateTargetInfo();
     await refreshMapList();

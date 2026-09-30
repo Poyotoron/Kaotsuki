@@ -28,6 +28,8 @@ struct RawMap {
 #[derive(Deserialize)]
 struct RawParameters {
     enabled: String,
+    #[serde(rename = "lipSync", default)]
+    lip_sync: Option<String>,
     channels: Vec<RawChannel>,
 }
 
@@ -74,6 +76,7 @@ pub struct MapView {
     pub avatars: Vec<AvatarRef>,
     pub generated_at: String,
     pub channel_count: u8,
+    pub has_lip_sync: bool,
     pub slots: Vec<SlotView>,
 }
 
@@ -109,6 +112,7 @@ pub struct ChannelAddresses {
 #[derive(Clone)]
 pub struct ParamNames {
     pub enabled: String,
+    pub lip_sync: Option<String>,
     pub channels: Vec<ChannelAddresses>,
 }
 
@@ -175,6 +179,10 @@ pub fn load(path: &Path) -> Result<(MapView, ParamNames), String> {
 
     let params = ParamNames {
         enabled: format!("{OSC_PREFIX}{}", raw.parameters.enabled),
+        lip_sync: raw
+            .parameters
+            .lip_sync
+            .map(|name| format!("{OSC_PREFIX}{name}")),
         channels: raw
             .parameters
             .channels
@@ -192,6 +200,7 @@ pub fn load(path: &Path) -> Result<(MapView, ParamNames), String> {
         avatars,
         generated_at: raw.generated_at,
         channel_count: channel_count as u8,
+        has_lip_sync: params.lip_sync.is_some(),
         slots,
     };
     Ok((view, params))
@@ -435,5 +444,30 @@ mod tests {
         assert_eq!(super::find_by_avatar(&folder, "avtr_last"), None);
         fs::remove_file(path).expect("remove map");
         fs::remove_dir(folder).expect("remove folder");
+    }
+
+    #[test]
+    fn lip_sync_is_read() {
+        let json = map_json(serde_json::json!({"parameters": {
+            "enabled": "Kaotsuki/Enabled", "lipSync": "Kaotsuki/LipSync",
+            "channels": [{"index": "Kaotsuki/Index", "value": "Kaotsuki/Value"}]
+        }}));
+        with_map_file(&json, |path| {
+            let (map, params) = load(path).expect("map");
+            assert!(map.has_lip_sync);
+            assert_eq!(
+                params.lip_sync.as_deref(),
+                Some("/avatar/parameters/Kaotsuki/LipSync")
+            );
+        });
+    }
+
+    #[test]
+    fn legacy_map_has_no_lip_sync() {
+        with_map_file(&map_json(serde_json::json!({})), |path| {
+            let (map, params) = load(path).expect("legacy map");
+            assert!(!map.has_lip_sync);
+            assert!(params.lip_sync.is_none());
+        });
     }
 }

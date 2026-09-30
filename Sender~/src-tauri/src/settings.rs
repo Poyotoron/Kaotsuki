@@ -5,12 +5,14 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
 #[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub host: String,
     pub port: u16,
     pub hold_ms: u64,
     pub last_map_path: Option<String>,
+    pub receive: bool,
+    pub receive_port: u16,
 }
 
 impl Default for Settings {
@@ -20,6 +22,8 @@ impl Default for Settings {
             port: 9000,
             hold_ms: 250,
             last_map_path: None,
+            receive: true,
+            receive_port: 9001,
         }
     }
 }
@@ -46,6 +50,9 @@ impl Settings {
     }
 
     pub fn validate(&self) -> Result<SocketAddr, String> {
+        if self.receive_port == 0 {
+            return Err("受信ポートは 1〜65535 で指定してください".to_string());
+        }
         if self.port == 0 {
             return Err("ポート番号は 1〜65535 で指定してください".to_string());
         }
@@ -66,4 +73,35 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
         .app_config_dir()
         .map(|path| path.join("settings.json"))
         .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+
+    #[test]
+    fn legacy_settings_keep_existing_values() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"host":"127.0.0.2","port":9100,"holdMs":400,"lastMapPath":"map.json"}"#,
+        )
+        .expect("legacy settings");
+        assert_eq!(settings.host, "127.0.0.2");
+        assert_eq!(settings.port, 9100);
+        assert_eq!(settings.hold_ms, 400);
+        assert_eq!(settings.last_map_path.as_deref(), Some("map.json"));
+        assert!(settings.receive);
+        assert_eq!(settings.receive_port, 9001);
+    }
+
+    #[test]
+    fn zero_receive_port_is_rejected() {
+        let settings = Settings {
+            receive_port: 0,
+            ..Settings::default()
+        };
+        assert_eq!(
+            settings.validate().err().as_deref(),
+            Some("受信ポートは 1〜65535 で指定してください")
+        );
+    }
 }

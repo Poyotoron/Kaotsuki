@@ -7,6 +7,10 @@ use tauri::{AppHandle, Emitter};
 
 const TICK: Duration = Duration::from_millis(20);
 const VALUE_INTERVAL: Duration = Duration::from_millis(50);
+const ENABLED_ECHO_GUARD: Duration = Duration::from_millis(500);
+// NOTE: VRChat が新しいアバターを読み込み終える前に送ると届かないため、少し待ってから ON にする。
+const AVATAR_CHANGE_DELAY: Duration = Duration::from_millis(1500);
+const AVATAR_CHANGE_GUARD: Duration = Duration::from_millis(2000);
 
 // NOTE: 枠ごとに Index / Value が別なので、枠どうしは互いを待たずに送ってよい。
 struct Channel {
@@ -100,6 +104,8 @@ pub struct Scheduler {
     enabled_address: Option<String>,
     channels: Vec<Channel>,
     pending_enable_at: Option<Instant>,
+    enabled: bool,
+    ignore_enabled_until: Option<Instant>,
     last_error: Option<(String, Instant)>,
 }
 
@@ -112,11 +118,13 @@ impl Scheduler {
             enabled_address: None,
             channels: Vec::new(),
             pending_enable_at: None,
+            enabled: true,
+            ignore_enabled_until: None,
             last_error: None,
         }
     }
 
-    pub fn apply_map(&mut self, map: &MapView, params: ParamNames) {
+    pub fn apply_map(&mut self, map: &MapView, params: ParamNames) -> Result<(), String> {
         self.enabled_address = Some(params.enabled);
         self.channels = params.channels.into_iter().map(Channel::new).collect();
         for slot in &map.slots {
@@ -134,7 +142,14 @@ impl Scheduler {
             channel.desired = channel.defaults;
             channel.sent = channel.defaults;
         }
-        self.pending_enable_at = None;
+        if self.enabled && self.pending_enable_at.is_none() {
+            let now = Instant::now();
+            self.ignore_enabled_until = Some(now + ENABLED_ECHO_GUARD);
+            if let Some(address) = &self.enabled_address {
+                return self.osc.send_bool(self.target, address, true);
+            }
+        }
+        Ok(())
     }
 
     pub fn set_slot(&mut self, channel: u8, index: u8, value: u8) {
@@ -150,31 +165,81 @@ impl Scheduler {
         }
     }
 
-    pub fn send_enabled(&mut self, enabled: bool) -> Result<(), String> {
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn desired(&self, channel: u8, index: u8) -> Option<u8> {
+        let channel = self.channels.get(usize::from(channel.checked_sub(1)?))?;
+        let index = usize::from(index);
+        channel.active[index].then_some(channel.desired[index])
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) -> Result<(), String> {
+        let now = Instant::now();
+        self.enabled = enabled;
+        self.pending_enable_at = None;
+        // NOTE: アバター側は OFF で既定値に戻るので送信済みの値だけ揃え、スライダーの位置（desired）は残す。ON に戻すと作りかけの表情が送り直される。
+        if !enabled {
+            for channel in &mut self.channels {
+                channel.sent = channel.defaults;
+                channel.current = 0;
+                channel.last_send = Some(now);
+            }
+        }
         let Some(address) = self.enabled_address.as_ref() else {
             return Ok(());
         };
-        let now = Instant::now();
-        let result = self.osc.send_bool(self.target, address, enabled);
-        self.reset_channels(now);
-        self.pending_enable_at = None;
-        result
+        self.ignore_enabled_until = Some(now + ENABLED_ECHO_GUARD);
+        self.osc.send_bool(self.target, address, enabled)
     }
 
     pub fn reset(&mut self) -> Result<(), String> {
+        let now = Instant::now();
+        self.reset_channels(now);
+        if !self.enabled {
+            return Ok(());
+        }
         let Some(address) = self.enabled_address.as_ref() else {
             return Ok(());
         };
-        let now = Instant::now();
+        // NOTE: スロットを 1 本ずつ送り直すより、アバター側の OFF 時のリセットを使うほうが一度で既定値に戻る。
         let result = self.osc.send_bool(self.target, address, false);
-        self.reset_channels(now);
         self.pending_enable_at = Some(now + self.hold);
+        self.ignore_enabled_until = Some(now + self.hold + ENABLED_ECHO_GUARD);
         result
     }
 
     pub fn set_target(&mut self, target: SocketAddr, hold: Duration) {
         self.target = target;
         self.hold = hold;
+    }
+
+    // NOTE: Enabled は保存されないので、アバターを読み込むと OFF・既定値から始まる。トグルが ON なら送り手が ON に戻す。
+    pub fn avatar_changed(&mut self, now: Instant) {
+        self.reset_channels(now);
+        self.pending_enable_at = self.enabled.then_some(now + AVATAR_CHANGE_DELAY);
+        self.ignore_enabled_until = Some(now + AVATAR_CHANGE_GUARD);
+    }
+
+    pub fn receive_enabled(&mut self, address: &str, value: bool, now: Instant) -> Option<bool> {
+        if self.enabled_address.as_deref() != Some(address) {
+            return None;
+        }
+        // NOTE: 自分が送った Enabled の折り返しや、アバター読み込み直後の OFF を、利用者の操作と取り違えないため。
+        if self.ignore_enabled_until.is_some_and(|until| now < until) || value == self.enabled {
+            return None;
+        }
+        self.enabled = value;
+        if !value {
+            self.pending_enable_at = None;
+            for channel in &mut self.channels {
+                channel.sent = channel.defaults;
+                channel.current = 0;
+                channel.last_send = Some(now);
+            }
+        }
+        Some(value)
     }
 
     pub fn tick(&mut self, now: Instant) -> Option<String> {
@@ -184,11 +249,17 @@ impl Scheduler {
             if now >= enable_at {
                 let result = self.osc.send_bool(self.target, enabled_address, true);
                 self.pending_enable_at = None;
+                self.ignore_enabled_until = Some(now + ENABLED_ECHO_GUARD);
                 for channel in &mut self.channels {
                     channel.last_send = Some(now);
                 }
                 return result.err();
             }
+            return None;
+        }
+
+        // NOTE: OFF の間はスライダーを動かしても送らず、ON にしたときにまとめて送る。
+        if !self.enabled {
             return None;
         }
 
@@ -258,18 +329,26 @@ mod tests {
             target,
             Duration::from_millis(250),
         );
-        scheduler.apply_map(
-            &MapView {
-                path: String::new(),
-                avatar_name: "Test".to_string(),
-                generated_at: String::new(),
-                channel_count: 1,
-                slots: vec![slot(1, 3), slot(1, 7)],
-            },
-            ParamNames {
-                enabled: "/enabled".to_string(),
-                channels: vec![addresses("/index", "/value")],
-            },
+        scheduler
+            .apply_map(
+                &MapView {
+                    path: String::new(),
+                    avatar_name: "Test".to_string(),
+                    map_name: "Test".to_string(),
+                    avatars: Vec::new(),
+                    generated_at: String::new(),
+                    channel_count: 1,
+                    slots: vec![slot(1, 3), slot(1, 7)],
+                },
+                ParamNames {
+                    enabled: "/enabled".to_string(),
+                    channels: vec![addresses("/index", "/value")],
+                },
+            )
+            .expect("apply map");
+        assert_eq!(
+            receive(&receiver),
+            ("/enabled".to_string(), OscType::Bool(true))
         );
         (scheduler, receiver, Instant::now())
     }
@@ -289,6 +368,7 @@ mod tests {
             blend_shape: format!("shape-{channel}-{index}"),
             default_weight: 0.0,
             default_value: 0,
+            group: String::new(),
         }
     }
 
@@ -311,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn map_load_does_not_send() {
+    fn map_load_sends_only_enabled_true() {
         let (_, receiver, _) = setup();
         assert_no_packet(&receiver);
     }
@@ -380,21 +460,29 @@ mod tests {
             target,
             Duration::from_millis(250),
         );
-        scheduler.apply_map(
-            &MapView {
-                path: String::new(),
-                avatar_name: "Test".to_string(),
-                generated_at: String::new(),
-                channel_count: 2,
-                slots: vec![slot(1, 3), slot(2, 1)],
-            },
-            ParamNames {
-                enabled: "/enabled".to_string(),
-                channels: vec![
-                    addresses("/index", "/value"),
-                    addresses("/index2", "/value2"),
-                ],
-            },
+        scheduler
+            .apply_map(
+                &MapView {
+                    path: String::new(),
+                    avatar_name: "Test".to_string(),
+                    generated_at: String::new(),
+                    channel_count: 2,
+                    map_name: "Test".to_string(),
+                    avatars: Vec::new(),
+                    slots: vec![slot(1, 3), slot(2, 1)],
+                },
+                ParamNames {
+                    enabled: "/enabled".to_string(),
+                    channels: vec![
+                        addresses("/index", "/value"),
+                        addresses("/index2", "/value2"),
+                    ],
+                },
+            )
+            .expect("apply map");
+        assert_eq!(
+            receive(&receiver),
+            ("/enabled".to_string(), OscType::Bool(true))
         );
 
         scheduler.set_slot(1, 3, 31);
@@ -415,5 +503,130 @@ mod tests {
         scheduler.set_slot(2, 1, 10);
         scheduler.tick(start);
         assert_no_packet(&receiver);
+    }
+
+    #[test]
+    fn off_keeps_desired_and_resends_on_enable() {
+        let (mut scheduler, receiver, start) = setup();
+        scheduler.set_slot(1, 3, 31);
+        scheduler.set_enabled(false).expect("disable");
+        assert_eq!(
+            receive(&receiver),
+            ("/enabled".to_string(), OscType::Bool(false))
+        );
+        scheduler.tick(start + Duration::from_millis(300));
+        assert_no_packet(&receiver);
+        scheduler.set_enabled(true).expect("enable");
+        assert_eq!(
+            receive(&receiver),
+            ("/enabled".to_string(), OscType::Bool(true))
+        );
+        scheduler.tick(start + Duration::from_millis(600));
+        assert_eq!(receive(&receiver), ("/index".to_string(), OscType::Int(3)));
+        assert_eq!(receive(&receiver), ("/value".to_string(), OscType::Int(31)));
+    }
+
+    #[test]
+    fn slots_changed_while_off_are_not_sent() {
+        let (mut scheduler, receiver, start) = setup();
+        scheduler.set_enabled(false).expect("disable");
+        receive(&receiver);
+        scheduler.set_slot(1, 7, 71);
+        scheduler.tick(start + Duration::from_secs(1));
+        assert_no_packet(&receiver);
+    }
+
+    #[test]
+    fn reset_while_off_sends_nothing() {
+        let (mut scheduler, receiver, start) = setup();
+        scheduler.set_enabled(false).expect("disable");
+        receive(&receiver);
+        scheduler.reset().expect("reset");
+        scheduler.tick(start + Duration::from_secs(1));
+        assert_no_packet(&receiver);
+        assert!(!scheduler.enabled());
+    }
+
+    #[test]
+    fn avatar_change_enables_after_delay() {
+        let (mut scheduler, receiver, start) = setup();
+        scheduler.set_slot(1, 3, 31);
+        scheduler.avatar_changed(start);
+        scheduler.tick(start + Duration::from_millis(1499));
+        assert_no_packet(&receiver);
+        scheduler.tick(start + Duration::from_millis(1500));
+        assert_eq!(
+            receive(&receiver),
+            ("/enabled".to_string(), OscType::Bool(true))
+        );
+        scheduler.tick(start + Duration::from_millis(2000));
+        assert_no_packet(&receiver);
+    }
+
+    #[test]
+    fn received_enabled_false_is_mirrored() {
+        let (mut scheduler, receiver, start) = setup();
+        assert_eq!(
+            scheduler.receive_enabled("/enabled", false, start + Duration::from_secs(10)),
+            Some(false)
+        );
+        assert!(!scheduler.enabled());
+        scheduler.set_slot(1, 3, 31);
+        scheduler.tick(start + Duration::from_secs(11));
+        assert_no_packet(&receiver);
+    }
+
+    #[test]
+    fn received_enabled_is_ignored_during_guard() {
+        let (mut scheduler, receiver, _) = setup();
+        scheduler.set_enabled(true).expect("enable");
+        receive(&receiver);
+        assert_eq!(
+            scheduler.receive_enabled(
+                "/enabled",
+                false,
+                Instant::now() + Duration::from_millis(100)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn received_enabled_with_other_address_is_ignored() {
+        let (mut scheduler, _, start) = setup();
+        assert_eq!(
+            scheduler.receive_enabled("/other", false, start + Duration::from_secs(10)),
+            None
+        );
+    }
+
+    #[test]
+    fn switching_maps_keeps_avatar_change_delay() {
+        let (mut scheduler, receiver, start) = setup();
+        scheduler.avatar_changed(start);
+        let map = MapView {
+            path: String::new(),
+            avatar_name: "Other".to_string(),
+            map_name: "Shared".to_string(),
+            avatars: Vec::new(),
+            generated_at: String::new(),
+            channel_count: 1,
+            slots: vec![slot(1, 7)],
+        };
+        scheduler
+            .apply_map(
+                &map,
+                ParamNames {
+                    enabled: "/new-enabled".to_string(),
+                    channels: vec![addresses("/index", "/value")],
+                },
+            )
+            .expect("apply map");
+        assert_no_packet(&receiver);
+        scheduler.tick(start + Duration::from_millis(1500));
+        assert_eq!(
+            receive(&receiver),
+            ("/new-enabled".to_string(), OscType::Bool(true))
+        );
     }
 }

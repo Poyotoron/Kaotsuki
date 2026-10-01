@@ -118,3 +118,6 @@ InitTestScene*.unity*
 Bin~/
 Sender~/src-tauri/target/
 Sender~/src-tauri/gen/
+
+# ドキュメントのビルド成果物
+docs~/site/

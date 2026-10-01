@@ -1,0 +1,65 @@
+site_name: Kaotsuki
+site_url: https://ghp.maaaaa.net/Kaotsuki/
+repo_url: https://github.com/Poyotoron/Kaotsuki
+site_dir: site
+
+theme:
+  name: material
+  language: ja
+  custom_dir: overrides
+  # サイト共通のファビコン。実体は www.maaaaa.net 側にあり、そちらを差し替えれば全ツールに反映される
+  favicon: https://www.maaaaa.net/favicon.png
+  features:
+    - navigation.sections
+    - navigation.expand
+    - toc.follow
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: ダークテーマに切り替える
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: ライトテーマに切り替える
+
+plugins:
+  - search:
+      lang: ja
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.superfences
+  - tables
+  - toc:
+      permalink: true
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  kaotsuki_version: !ENV [KAOTSUKI_VERSION, dev]
+
+nav:
+  - はじめに: index.md
+  - インストール: install.md
+  - クイックスタート: quickstart.md
+  - 受け手の設定: receiver.md
+  - 送り手の使い方: sender.md
+  - 表情と AnimationClip: expressions.md
+  - マップと自動切換え: maps.md
+  - 口パクとまばたき: tracking.md
+  - 他のツールとの併用: other-tools.md
+  - OSC の仕様: osc.md
+  - 困ったときは: troubleshooting.md
+  - 更新履歴: changelog.md

@@ -5,6 +5,9 @@ namespace Poyo.Kaotsuki.Editor
     {
         internal const string PackageId = "net.maaaaa.kaotsuki";
         internal const string DisplayName = "Kaotsuki";
+        internal const string ModularAvatarPluginId = "nadena.dev.modular-avatar";
+        internal const string BlinkFixPluginId = "dev.lemoneru.avatar-blink-fix";
+        internal const string BlinkFixBakePluginId = "dev.lemoneru.avatar-blink-fix.redefine";
 
         internal const string ParamEnabled = "Kaotsuki/Enabled";
         internal const string ParamLipSync = "Kaotsuki/LipSync";

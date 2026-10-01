@@ -1,0 +1,24 @@
+/* 基調色は送り手アプリのアクセント色（ピンク）に揃える。 */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #c2416f;
+  --md-primary-fg-color--light: #e86a92;
+  --md-primary-fg-color--dark: #962f55;
+  --md-accent-fg-color: #d6517d;
+  --md-typeset-a-color: #b23a65;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #962f55;
+  --md-primary-fg-color--light: #f08aab;
+  --md-primary-fg-color--dark: #74233f;
+  --md-accent-fg-color: #f08aab;
+  --md-typeset-a-color: #f08aab;
+}
+
+.md-typeset h1,
+.md-typeset h2 {
+  color: var(--md-typeset-a-color);
+}
+
+/* 注記ブロックの色は種類ごとの既定色（警告=橙、危険=赤 …）をそのまま使う。
+   基調色で塗り潰すと、警告と補足の区別がつかなくなるため。 */

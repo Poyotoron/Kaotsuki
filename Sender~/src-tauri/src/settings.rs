@@ -11,6 +11,7 @@ pub struct Settings {
     pub port: u16,
     pub hold_ms: u64,
     pub last_map_path: Option<String>,
+    pub last_clip_dir: Option<String>,
     pub receive: bool,
     pub receive_port: u16,
 }
@@ -22,6 +23,7 @@ impl Default for Settings {
             port: 9000,
             hold_ms: 250,
             last_map_path: None,
+            last_clip_dir: None,
             receive: true,
             receive_port: 9001,
         }
@@ -89,6 +91,7 @@ mod tests {
         assert_eq!(settings.port, 9100);
         assert_eq!(settings.hold_ms, 400);
         assert_eq!(settings.last_map_path.as_deref(), Some("map.json"));
+        assert_eq!(settings.last_clip_dir, None);
         assert!(settings.receive);
         assert_eq!(settings.receive_port, 9001);
     }

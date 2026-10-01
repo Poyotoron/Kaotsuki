@@ -80,7 +80,9 @@ namespace Poyo.Kaotsuki.Editor
                     ? new HashSet<string>()
                     : new HashSet<string>(entry.excludedBlendShapes);
                 var path = AnimationUtility.CalculateTransformPath(renderer.transform, avatarRoot);
-                var separators = KaotsukiSeparators.Resolve(mesh, entry);
+                var auto = KaotsukiSeparators.ResolveAuto(mesh);
+                var separators = KaotsukiSeparators.Resolve(mesh, entry, auto);
+                var frozen = KaotsukiFrozenShapes.Resolve(renderer);
                 var group = string.Empty;
 
                 for (var blendShapeIndex = 0; blendShapeIndex < mesh.blendShapeCount; blendShapeIndex++)
@@ -89,7 +91,13 @@ namespace Poyo.Kaotsuki.Editor
                     // NOTE: 区切りは中身の無いダミーなので操作対象にしない。除外されていても、グループ分けには使う。
                     if (separators[blendShapeIndex])
                     {
-                        group = KaotsukiSeparators.GroupName(blendShape);
+                        group = KaotsukiSeparators.GroupName(blendShape, auto[blendShapeIndex]);
+                        continue;
+                    }
+
+                    // NOTE: 固定されるブレンドシェイプはビルドの後段でメッシュから消えるので、動かしても何も起きない。アニメーションに入れると警告も出るため、スロットにしない。
+                    if (frozen.Contains(blendShape))
+                    {
                         continue;
                     }
 

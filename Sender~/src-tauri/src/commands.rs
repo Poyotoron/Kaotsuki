@@ -1,3 +1,4 @@
+use crate::clip;
 use crate::expression::{self, ApplyResult};
 use crate::map::{self, MapEntry, MapView};
 use crate::receiver::{ReceiveStatus, Receiver};
@@ -144,15 +145,9 @@ pub fn get_settings(state: State<'_, AppState>) -> Settings {
 pub fn save_settings(
     app: AppHandle,
     state: State<'_, AppState>,
-    settings: Settings,
+    mut settings: Settings,
 ) -> Result<(), String> {
     let target = settings.validate()?;
-    settings.save(&app)?;
-    state
-        .scheduler
-        .lock()
-        .map_err(|_| "送り手の状態を更新できません".to_string())?
-        .set_target(target, Duration::from_millis(settings.hold_ms));
     // NOTE: ポートを使っていたアプリを閉じた後、設定を保存し直すだけで受信を再開できるようにする。
     let retry = settings.receive
         && state
@@ -165,12 +160,21 @@ pub fn save_settings(
             .settings
             .lock()
             .map_err(|_| "設定を更新できません".to_string())?;
+        // NOTE: 前回のマップとフォルダは送り手が更新する。画面が古い値を持ったまま保存して巻き戻さないように、こちらの値を残す。
+        settings.last_map_path = previous.last_map_path.clone();
+        settings.last_clip_dir = previous.last_clip_dir.clone();
+        settings.save(&app)?;
         let changed = previous.receive != settings.receive
             || previous.receive_port != settings.receive_port
             || retry;
         *previous = settings.clone();
         changed
     };
+    state
+        .scheduler
+        .lock()
+        .map_err(|_| "送り手の状態を更新できません".to_string())?
+        .set_target(target, Duration::from_millis(settings.hold_ms));
     if changed {
         restart_receiver(&app, &state, &settings);
     }
@@ -277,22 +281,110 @@ pub fn save_expression(
 }
 
 #[tauri::command]
-pub fn apply_expression(state: State<'_, AppState>, path: String) -> Result<ApplyResult, String> {
-    let current = state
-        .current_map
-        .lock()
-        .map_err(|_| "マップを取得できません".to_string())?;
-    let map = current
-        .as_ref()
-        .ok_or_else(|| "マップを開いてください".to_string())?;
-    let entries = expression::load(Path::new(&path))?;
-    let result = expression::apply(&entries, &map.slots);
-    let mut scheduler = state
-        .scheduler
-        .lock()
-        .map_err(|_| "送り手の状態を更新できません".to_string())?;
-    for slot in &result.values {
-        scheduler.set_slot(slot.channel, slot.index, slot.value);
+pub fn apply_expression(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<ApplyResult, String> {
+    let path_ref = Path::new(&path);
+    let is_clip = path_ref
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("anim"));
+    let (entries, animated) = if is_clip {
+        let clip = clip::load(path_ref)?;
+        (clip.entries, clip.animated)
+    } else {
+        (expression::load(path_ref)?, false)
+    };
+    let result = {
+        let current = state
+            .current_map
+            .lock()
+            .map_err(|_| "マップを取得できません".to_string())?;
+        let map = current
+            .as_ref()
+            .ok_or_else(|| "マップを開いてください".to_string())?;
+        let mut result = expression::apply(&entries, &map.slots);
+        result.animated = animated;
+        let mut scheduler = state
+            .scheduler
+            .lock()
+            .map_err(|_| "送り手の状態を更新できません".to_string())?;
+        for slot in &result.values {
+            scheduler.set_slot(slot.channel, slot.index, slot.value);
+        }
+        result
+    };
+    if is_clip {
+        remember_clip_dir(&app, &state, path_ref);
     }
     Ok(result)
+}
+
+/// 前回 AnimationClip を扱ったフォルダを覚える。失敗はイベントで知らせるだけにする。
+fn remember_clip_dir(app: &AppHandle, state: &AppState, path: &Path) {
+    let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return;
+    };
+    let save_error = match state.settings.lock() {
+        Ok(mut settings) => {
+            settings.last_clip_dir = Some(parent.to_string_lossy().into_owned());
+            settings.save(app).err()
+        }
+        Err(_) => Some("設定を更新できません".to_string()),
+    };
+    if let Some(error) = save_error {
+        let _ = app.emit("send-error", format!("設定を保存できませんでした: {error}"));
+    }
+}
+
+#[tauri::command]
+pub fn clip_folder(state: State<'_, AppState>) -> Option<String> {
+    state
+        .settings
+        .lock()
+        .ok()
+        .and_then(|settings| settings.last_clip_dir.clone())
+        .filter(|path| Path::new(path).is_dir())
+}
+
+#[tauri::command]
+pub fn save_clip(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<usize, String> {
+    let (map, values) = {
+        let current = state
+            .current_map
+            .lock()
+            .map_err(|_| "マップを取得できません".to_string())?;
+        let map = current
+            .as_ref()
+            .ok_or_else(|| "マップを開いてください".to_string())?;
+        let scheduler = state
+            .scheduler
+            .lock()
+            .map_err(|_| "送り手の状態を取得できません".to_string())?;
+        let values: std::collections::HashMap<(u8, u8), u8> = map
+            .slots
+            .iter()
+            .filter_map(|slot| {
+                scheduler
+                    .desired(slot.channel, slot.index)
+                    .map(|value| ((slot.channel, slot.index), value))
+            })
+            .collect();
+        (map.clone(), values)
+    };
+    let path = Path::new(&path);
+    let count = clip::save(path, &map, |channel, index| {
+        values.get(&(channel, index)).copied()
+    })?;
+    remember_clip_dir(&app, &state, path);
+    Ok(count)
 }

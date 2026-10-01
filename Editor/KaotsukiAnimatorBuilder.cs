@@ -95,18 +95,13 @@ namespace Poyo.Kaotsuki.Editor
             off.writeDefaultValues = true;
             machine.defaultState = init;
 
-            AddTransition(init, on, (AnimatorConditionMode.If, KaotsukiInfo.ParamEnabled),
-                (AnimatorConditionMode.IfNot, KaotsukiInfo.ParamLipSync));
-            AddTransition(off, on, (AnimatorConditionMode.If, KaotsukiInfo.ParamEnabled),
-                (AnimatorConditionMode.IfNot, KaotsukiInfo.ParamLipSync));
-            AddTransition(init, onLipSync, (AnimatorConditionMode.If, KaotsukiInfo.ParamEnabled),
-                (AnimatorConditionMode.If, KaotsukiInfo.ParamLipSync));
-            AddTransition(off, onLipSync, (AnimatorConditionMode.If, KaotsukiInfo.ParamEnabled),
-                (AnimatorConditionMode.If, KaotsukiInfo.ParamLipSync));
-            AddTransition(on, onLipSync, (AnimatorConditionMode.If, KaotsukiInfo.ParamLipSync));
-            AddTransition(onLipSync, on, (AnimatorConditionMode.IfNot, KaotsukiInfo.ParamLipSync));
             AddTransition(on, off, (AnimatorConditionMode.IfNot, KaotsukiInfo.ParamEnabled));
             AddTransition(onLipSync, off, (AnimatorConditionMode.IfNot, KaotsukiInfo.ParamEnabled));
+            // NOTE: Tracking Control はステートに入ったときに 1 度しか効かない。表情のレイヤーや VRChat が後から口のトラッキングを戻すと（アイテムやカメラを持ったときなど）、口パクが戻ってしまう。ON の間は毎フレーム入り直し、トラッキングとレイヤーの重みを設定し直す。
+            AddAnyStateTransition(machine, on, (AnimatorConditionMode.If, KaotsukiInfo.ParamEnabled),
+                (AnimatorConditionMode.IfNot, KaotsukiInfo.ParamLipSync));
+            AddAnyStateTransition(machine, onLipSync, (AnimatorConditionMode.If, KaotsukiInfo.ParamEnabled),
+                (AnimatorConditionMode.If, KaotsukiInfo.ParamLipSync));
 
             var onBehaviours = new List<StateMachineBehaviour>
             {
@@ -328,6 +323,23 @@ namespace Poyo.Kaotsuki.Editor
             params (AnimatorConditionMode mode, string parameter)[] conditions)
         {
             var transition = source.AddTransition(destination);
+            transition.hasExitTime = false;
+            transition.hasFixedDuration = true;
+            transition.duration = 0f;
+            transition.exitTime = 0f;
+            foreach (var condition in conditions)
+            {
+                transition.AddCondition(condition.mode, 0f, condition.parameter);
+            }
+        }
+
+        private static void AddAnyStateTransition(
+            AnimatorStateMachine machine,
+            AnimatorState destination,
+            params (AnimatorConditionMode mode, string parameter)[] conditions)
+        {
+            var transition = machine.AddAnyStateTransition(destination);
+            transition.canTransitionToSelf = true;
             transition.hasExitTime = false;
             transition.hasFixedDuration = true;
             transition.duration = 0f;

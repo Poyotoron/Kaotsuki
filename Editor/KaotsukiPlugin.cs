@@ -16,9 +16,14 @@ namespace Poyo.Kaotsuki.Editor
 
         protected override void Configure()
         {
-            // NOTE: 生成した Modular Avatar のコンポーネントを Modular Avatar 自身に処理させるため、先に走らせる。
-            InPhase(BuildPhase.Generating)
-                .BeforePlugin("nadena.dev.modular-avatar")
+            // NOTE: スロットの既定値と口パク・まばたきの複製は、この時点のメッシュから作る。ビルド中に顔のメッシュを作り替える
+            //       ツールより前に走ると、ON にしたとき古い既定値や修正前の形を書いて顔が変わるため、Generating のツールより後の
+            //       Transforming で、Avatar Blink Fix の後に走らせる。入っていないプラグインへの順序指定は NDMF が無視する。
+            // NOTE: 生成した Modular Avatar のコンポーネントを Modular Avatar 自身に処理させるため、Modular Avatar より先に走らせる。
+            InPhase(BuildPhase.Transforming)
+                .AfterPlugin(KaotsukiInfo.BlinkFixPluginId)
+                .AfterPlugin(KaotsukiInfo.BlinkFixBakePluginId)
+                .BeforePlugin(KaotsukiInfo.ModularAvatarPluginId)
                 .Run("Generate receiver", Generate);
         }
 

@@ -40,12 +40,14 @@ namespace Poyo.Kaotsuki.Editor
             internal string[] Names = Array.Empty<string>();
             internal GUIContent[] Labels = Array.Empty<GUIContent>();
             internal bool[] Enabled = Array.Empty<bool>();
+            internal bool[] Frozen = Array.Empty<bool>();
             internal GUIContent Header = Empty;
             internal bool Expanded;
             internal string Search = string.Empty;
             internal bool[] Visible = Array.Empty<bool>();
             internal Vector2 Scroll;
             internal bool[] Separator = Array.Empty<bool>();
+            internal KaotsukiSeparatorRule[] Auto = Array.Empty<KaotsukiSeparatorRule>();
             internal GUIContent[] EditLabels = Array.Empty<GUIContent>();
             internal int[] Ungrouped = Array.Empty<int>();
             internal GroupView[] Groups = Array.Empty<GroupView>();
@@ -64,6 +66,8 @@ namespace Poyo.Kaotsuki.Editor
         private static readonly GUIContent MapNameLabel = new GUIContent("マップ名");
         private static readonly GUIContent MapNameHint = new GUIContent("同じマップ名のアバターは、送り手で 1 つのマップを共有します。空欄ならアバター名を使います。");
         private static readonly GUIContent EditSeparatorsLabel = new GUIContent("区切りを編集");
+        private const string FrozenSuffix = "（固定）";
+        private const string FrozenTooltip = "AAO Freeze BlendShapes で固定されるため操作できません。";
         private const string EditSeparatorsHelp = "チェックしたブレンドシェイプを区切りとして扱います。区切りは操作対象になりません。";
         private static readonly GUIContent GroupOnLabel = new GUIContent("ON");
         private static readonly GUIContent GroupOffLabel = new GUIContent("OFF");
@@ -271,6 +275,16 @@ namespace Poyo.Kaotsuki.Editor
                                 continue;
                             }
 
+                            if (!view.EditSeparators && view.Frozen[blendShapeIndex])
+                            {
+                                using (new EditorGUI.DisabledScope(true))
+                                {
+                                    EditorGUILayout.ToggleLeft(view.Labels[blendShapeIndex], false);
+                                }
+
+                                continue;
+                            }
+
                             var previous = view.EditSeparators ? view.Separator[blendShapeIndex] : view.Enabled[blendShapeIndex];
                             var enabled = EditorGUILayout.ToggleLeft(
                                 view.EditSeparators ? view.EditLabels[blendShapeIndex] : view.Labels[blendShapeIndex], previous);
@@ -375,6 +389,16 @@ namespace Poyo.Kaotsuki.Editor
         {
             foreach (var index in members)
             {
+                if (!view.EditSeparators && view.Frozen[index])
+                {
+                    using (new EditorGUI.DisabledScope(true))
+                    {
+                        EditorGUILayout.ToggleLeft(view.Labels[index], false);
+                    }
+
+                    continue;
+                }
+
                 var enabled = EditorGUILayout.ToggleLeft(view.Labels[index], view.Enabled[index]);
                 if (change == ChangeKind.None && enabled != view.Enabled[index])
                 {
@@ -465,11 +489,17 @@ namespace Poyo.Kaotsuki.Editor
                     break;
                 case ChangeKind.SetSeparator:
                     KaotsukiSeparators.SetSeparator(receiver.meshes[meshIndex],
-                        _views[meshIndex].Names[blendShapeIndex], boolValue);
+                        _views[meshIndex].Names[blendShapeIndex], boolValue,
+                        _views[meshIndex].Auto[blendShapeIndex] != KaotsukiSeparatorRule.None);
                     break;
                 case ChangeKind.SetGroup:
                     foreach (var member in _views[meshIndex].Groups[groupIndex].Members)
                     {
+                        if (_views[meshIndex].Frozen[member])
+                        {
+                            continue;
+                        }
+
                         SetBlendShape(receiver.meshes[meshIndex], _views[meshIndex].Names[member], boolValue);
                     }
                     break;
@@ -525,7 +555,7 @@ namespace Poyo.Kaotsuki.Editor
             var mesh = entry.renderer.sharedMesh;
             for (var i = 0; i < mesh.blendShapeCount; i++)
             {
-                if (view.Separator[i])
+                if (view.Separator[i] || view.Frozen[i])
                 {
                     continue;
                 }
@@ -670,8 +700,11 @@ namespace Poyo.Kaotsuki.Editor
                 view.Labels = new GUIContent[total];
                 view.EditLabels = new GUIContent[total];
                 view.Enabled = new bool[total];
+                view.Frozen = new bool[total];
+                var frozen = KaotsukiFrozenShapes.Resolve(renderer);
                 view.Visible = new bool[total];
-                view.Separator = KaotsukiSeparators.Resolve(mesh, entry);
+                view.Auto = KaotsukiSeparators.ResolveAuto(mesh);
+                view.Separator = KaotsukiSeparators.Resolve(mesh, entry, view.Auto);
                 var ungrouped = new List<int>();
                 var groups = new List<GroupView>();
                 var members = new List<List<int>>();
@@ -684,16 +717,19 @@ namespace Poyo.Kaotsuki.Editor
                     var enabled = excluded == null || !excluded.Contains(name);
                     view.Names[blendShapeIndex] = name;
                     var kind = tracking.KindOf(renderer, name);
-                    view.Labels[blendShapeIndex] = new GUIContent(kind == KaotsukiTrackingKind.LipSync
+                    view.Frozen[blendShapeIndex] = frozen.Contains(name);
+                    view.Labels[blendShapeIndex] = view.Frozen[blendShapeIndex]
+                        ? new GUIContent(name + FrozenSuffix, FrozenTooltip)
+                        : new GUIContent(kind == KaotsukiTrackingKind.LipSync
                         ? name + "（口パク）"
                         : kind == KaotsukiTrackingKind.Eyelid ? name + "（まばたき）" : name);
-                    view.EditLabels[blendShapeIndex] = KaotsukiSeparators.IsAutoSeparator(name)
+                    view.EditLabels[blendShapeIndex] = view.Auto[blendShapeIndex] != KaotsukiSeparatorRule.None
                         ? new GUIContent(name + "（自動）")
                         : new GUIContent(name);
                     view.Enabled[blendShapeIndex] = enabled;
                     if (view.Separator[blendShapeIndex])
                     {
-                        groups.Add(new GroupView { Label = new GUIContent(KaotsukiSeparators.GroupName(name)) });
+                        groups.Add(new GroupView { Label = new GUIContent(KaotsukiSeparators.GroupName(name, view.Auto[blendShapeIndex])) });
                         members.Add(new List<int>());
                         continue;
                     }
@@ -705,6 +741,11 @@ namespace Poyo.Kaotsuki.Editor
                     else
                     {
                         members[members.Count - 1].Add(blendShapeIndex);
+                    }
+
+                    if (view.Frozen[blendShapeIndex])
+                    {
+                        continue;
                     }
 
                     operable++;
@@ -721,15 +762,22 @@ namespace Poyo.Kaotsuki.Editor
                     var group = view.Groups[groupIndex];
                     group.Members = members[groupIndex].ToArray();
                     var enabledCount = 0;
+                    var operableCount = 0;
                     foreach (var member in group.Members)
                     {
+                        if (view.Frozen[member])
+                        {
+                            continue;
+                        }
+
+                        operableCount++;
                         if (view.Enabled[member])
                         {
                             enabledCount++;
                         }
                     }
 
-                    group.Count = new GUIContent(enabledCount + " / " + group.Members.Length);
+                    group.Count = new GUIContent(enabledCount + " / " + operableCount);
                     group.Expanded = old != null && old.Groups.Length == view.Groups.Length && old.Groups[groupIndex].Expanded;
                 }
 

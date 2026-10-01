@@ -14,6 +14,7 @@ const elements = {
   lipSyncText: document.querySelector('#toggle-lipsync .switch-text'),
   reset: document.querySelector('#btn-reset'),
   saveExpression: document.querySelector('#btn-save-expression'),
+  saveClip: document.querySelector('#btn-save-clip'),
   loadExpression: document.querySelector('#btn-load-expression'),
   targetInfo: document.querySelector('#target-info'),
   settings: document.querySelector('#btn-settings'),
@@ -93,6 +94,7 @@ function setControlsEnabled(enabled) {
   elements.reset.disabled = !enabled;
   elements.search.disabled = !enabled;
   elements.saveExpression.disabled = !enabled;
+  elements.saveClip.disabled = !enabled;
   elements.loadExpression.disabled = !enabled;
 }
 
@@ -243,6 +245,12 @@ function renderSlots(map) {
     fragment.append(details);
     meshViews.push(meshView);
   }
+  for (const mesh of meshViews) {
+    restripe(mesh.rows);
+    for (const group of mesh.groups) {
+      restripe(group.rows);
+    }
+  }
   elements.slots.replaceChildren(fragment);
 }
 
@@ -311,6 +319,8 @@ function localIsoString(date) {
 }
 
 const expressionFilters = [{ name: '表情ファイル', extensions: ['json'] }];
+const loadFilters = [{ name: '表情ファイル・AnimationClip', extensions: ['json', 'anim'] }];
+const clipFilters = [{ name: 'AnimationClip', extensions: ['anim'] }];
 elements.saveExpression.addEventListener('click', async () => {
   try {
     const folder = await invoke('expression_folder');
@@ -328,10 +338,27 @@ elements.saveExpression.addEventListener('click', async () => {
   }
 });
 
+elements.saveClip.addEventListener('click', async () => {
+  try {
+    const folder = await invoke('clip_folder');
+    const date = new Date();
+    const mapName = currentMap.mapName.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_');
+    const name = `${mapName}_${localTimestamp(date)}.anim`;
+    const path = await save({ defaultPath: folder ? `${folder}\\${name}` : name, filters: clipFilters });
+    if (path === null) {
+      return;
+    }
+    const count = await invoke('save_clip', { path });
+    showMessage(`AnimationClip を保存しました（${count} 件）`, 'info');
+  } catch (error) {
+    showError(errorMessage(error));
+  }
+});
+
 elements.loadExpression.addEventListener('click', async () => {
   try {
     const folder = await invoke('expression_folder');
-    const path = await open({ defaultPath: folder, multiple: false, filters: expressionFilters });
+    const path = await open({ defaultPath: folder, multiple: false, filters: loadFilters });
     if (path === null) {
       return;
     }
@@ -342,9 +369,10 @@ elements.loadExpression.addEventListener('click', async () => {
         renderSlotValue(view, slot.value);
       }
     }
-    showMessage(result.unmatched === 0
+    const message = result.unmatched === 0
       ? `表情を読み込みました（${result.applied} 件を適用）`
-      : `表情を読み込みました（${result.applied} 件を適用、${result.unmatched} 件はこのアバターにありません）`, 'info');
+      : `表情を読み込みました（${result.applied} 件を適用、${result.unmatched} 件はこのアバターにありません）`;
+    showMessage(message + (result.animated ? '。時間で変化するカーブは最初のキーの値を使いました' : ''), 'info');
   } catch (error) {
     showError(errorMessage(error));
   }
@@ -449,7 +477,20 @@ function filterRows(rows, query) {
       visible += 1;
     }
   }
+  restripe(rows);
   return visible;
+}
+
+// 見えている行だけを数えて 1 行おきに色を付ける。検索で隠れた行を数えると縞がずれるため。
+function restripe(rows) {
+  let visible = 0;
+  for (const view of rows) {
+    if (view.row.hidden) {
+      continue;
+    }
+    view.row.classList.toggle('alt', visible % 2 === 1);
+    visible += 1;
+  }
 }
 
 elements.settings.addEventListener('click', () => {
@@ -469,6 +510,7 @@ elements.settingsSave.addEventListener('click', async () => {
     port: Number(elements.port.value),
     holdMs: Number(elements.hold.value),
     lastMapPath: settings.lastMapPath,
+    lastClipDir: settings.lastClipDir,
     receive: elements.receive.checked,
     receivePort: Number(elements.receivePort.value),
   };

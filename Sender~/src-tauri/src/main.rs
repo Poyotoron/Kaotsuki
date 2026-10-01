@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod clip;
 mod commands;
 mod expression;
 mod map;
@@ -62,6 +63,8 @@ fn main() {
             commands::get_receive_status,
             commands::expression_folder,
             commands::save_expression,
+            commands::clip_folder,
+            commands::save_clip,
             commands::apply_expression,
             commands::reset,
         ])

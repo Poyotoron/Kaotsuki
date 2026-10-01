@@ -18,6 +18,7 @@ pub struct ApplyResult {
     pub values: Vec<SlotValue>,
     pub applied: usize,
     pub unmatched: usize,
+    pub animated: bool,
 }
 
 #[derive(Serialize)]
@@ -141,6 +142,7 @@ pub fn apply(entries: &[Entry], slots: &[SlotView]) -> ApplyResult {
         values,
         applied: used.len(),
         unmatched: entries.len() - used.len(),
+        animated: false,
     }
 }
 

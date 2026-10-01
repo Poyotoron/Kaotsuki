@@ -8,6 +8,8 @@
   --error-bg: #FDE8EC;
   --danger: #D93A4A;
   --border: color-mix(in srgb, var(--text) 18%, transparent);
+  --row-alt: color-mix(in srgb, var(--text) 5%, transparent);
+  --row-hover: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -241,12 +243,23 @@ details.group > summary {
   align-items: center;
   gap: 8px;
   min-height: 36px;
+  padding: 0 6px;
+  border-radius: 4px;
 }
 
 .row .name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.row.alt {
+  background: var(--row-alt);
+}
+
+.row:hover,
+.row:focus-within {
+  background: var(--row-hover);
 }
 
 .row[hidden] {

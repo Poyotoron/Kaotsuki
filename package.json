@@ -10,6 +10,7 @@
     "url": "https://github.com/Poyotoron"
   },
   "url": "https://github.com/Poyotoron/Kaotsuki/releases/download/0.3.0/net.maaaaa.kaotsuki-0.3.0.zip",
+  "documentationUrl": "https://ghp.maaaaa.net/Kaotsuki/",
   "changelogUrl": "https://github.com/Poyotoron/Kaotsuki/blob/main/CHANGELOG.md",
   "vpmDependencies": {
     "com.vrchat.avatars": ">=3.7.0",
